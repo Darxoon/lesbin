@@ -1,8 +1,8 @@
-use std::{borrow::Cow, env, fs, io::{ErrorKind}, process::exit};
+use std::{env, fs, io::{ErrorKind}, process::exit};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use ratatui::{DefaultTerminal, Frame, layout::Margin, style::{Color, Style}, text::Span};
+use ratatui::{DefaultTerminal, Frame, layout::{Margin, Rect}, style::{Color, Style}, text::Span};
 
 use crate::util::{LineColor, LineWriter};
 
@@ -54,7 +54,7 @@ struct State<'a> {
     file_name: &'a str,
     input_bytes: &'a [u8],
     
-    bottom_text: Cow<'static, str>,
+    bottom_text: Option<String>,
 }
 
 impl<'a> State<'a> {
@@ -64,7 +64,7 @@ impl<'a> State<'a> {
             max_rows: input_bytes.len().div_ceil(16),
             file_name,
             input_bytes,
-            bottom_text: Cow::Borrowed(HELP_TEXT),
+            bottom_text: None,
         }
     }
 }
@@ -104,84 +104,102 @@ const TITLE_STYLE: Style = Style::new()
     .fg(Color::Black)
     .bg(Color::Rgb(220, 220, 220));
 
-const HELP_TEXT: &str = "Q exit, J/Down Scroll Down, K/Up Scroll Up";
-
 fn draw(frame: &mut Frame, state: &State<'_>) -> Result<()> {
     frame.render_widget(Span::styled(state.file_name, TITLE_STYLE), frame.area());
-    frame.render_widget(Span::raw(&*state.bottom_text),
-        frame.area().rows().last().unwrap());
+    draw_bottom(frame, state, frame.area().rows().last().unwrap())?;
     
     let area = frame.area().inner(Margin::new(2, 2));
     
     for (i, row) in area.rows().enumerate() {
-        if i >= state.max_rows {
+        if i + state.scroll_pos >= state.max_rows {
             break;
         }
         
-        let offset = (i + state.scroll_pos) * 0x10;
-        
-        let mut writer = LineWriter::new(frame, row);
-        
-        // Write offset
-        writer.write(LineColor::Address, format_args!("{:04x} {:04x}", offset >> 16, offset & 0xFFFF))?;
-        writer.write_str(LineColor::Regular, ":  ");
-        
-        let first_half = &state.input_bytes[offset..usize::min(
-            offset + 0x8, 
-            state.input_bytes.len(),
-        )];
-        let second_half = &state.input_bytes[usize::min(
-            offset + 0x8, 
-            state.input_bytes.len(),
-        )..usize::min(
-            offset + 0x10, 
-            state.input_bytes.len(),
-        )];
-        
-        let color_of = |x: u8| {
-            if x == 0 {
-                LineColor::Zero
-            } else {
-                LineColor::Regular
-            }
-        };
-        
-        // Write byte values
-        for x in first_half.iter().copied() {
-            writer.write(color_of(x), format_args!("{x:02x} "))?;
-        }
-        
-        writer.write_whitespace(" ");
-        
-        for x in second_half.iter().copied() {
-            writer.write(color_of(x), format_args!("{x:02x} "))?;
-        }
-        
-        // Write ascii text
-        writer.seek(64);
-        
-        for x in first_half.iter().copied() {
-            let mut ascii = x as char;
-            if x & 0x80 == 1 || !ascii.is_ascii_graphic() {
-                ascii = '.';
-            }
-            
-            writer.write_char(LineColor::Regular, ascii);
-        }
-        
-        writer.write_whitespace(" ");
-        
-        for x in second_half.iter().copied() {
-            let mut ascii = x as char;
-            if x & 0x80 == 1 || !ascii.is_ascii_graphic() {
-                ascii = '.';
-            }
-            
-            writer.write_char(LineColor::Regular, ascii);
-        }
-        
-        writer.flush();
+        draw_line(frame, state, row, (i + state.scroll_pos) * 0x10)?;
     }
     
+    Ok(())
+}
+
+fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
+    let mut writer = LineWriter::new(frame, row);
+    
+    if let Some(bottom_text) = state.bottom_text.as_deref() {
+        writer.write_str(LineColor::Regular, bottom_text);
+    } else {
+        writer.write_str(LineColor::RegularBold, "Q");
+        writer.write_str(LineColor::Regular, " exit, ");
+        writer.write_str(LineColor::RegularBold, "J/Down");
+        writer.write_str(LineColor::Regular, " scroll down, ");
+        writer.write_str(LineColor::RegularBold, "K/Up");
+        writer.write_str(LineColor::Regular, " scroll up");
+    }
+    
+    writer.flush();
+    Ok(())
+}
+
+fn draw_line(frame: &mut Frame, state: &State<'_>, row: Rect, offset: usize) -> Result<()> {
+    let mut writer = LineWriter::new(frame, row);
+    
+    // Write offset
+    writer.write(LineColor::Address, format_args!("{:04x} {:04x}", offset >> 16, offset & 0xFFFF))?;
+    writer.write_str(LineColor::Regular, ":  ");
+    
+    let first_half = &state.input_bytes[offset..usize::min(
+        offset + 0x8, 
+        state.input_bytes.len(),
+    )];
+    let second_half = &state.input_bytes[usize::min(
+        offset + 0x8, 
+        state.input_bytes.len(),
+    )..usize::min(
+        offset + 0x10, 
+        state.input_bytes.len(),
+    )];
+    
+    let color_of = |x: u8| {
+        if x == 0 {
+            LineColor::Zero
+        } else {
+            LineColor::Regular
+        }
+    };
+    
+    // Write byte values
+    for x in first_half.iter().copied() {
+        writer.write(color_of(x), format_args!("{x:02x} "))?;
+    }
+    
+    writer.write_whitespace(" ");
+    
+    for x in second_half.iter().copied() {
+        writer.write(color_of(x), format_args!("{x:02x} "))?;
+    }
+    
+    // Write ascii text
+    writer.seek(64);
+    
+    for x in first_half.iter().copied() {
+        let mut ascii = x as char;
+        if x & 0x80 == 1 || !ascii.is_ascii_graphic() {
+            ascii = '.';
+        }
+        
+        writer.write_char(LineColor::Regular, ascii);
+    }
+    
+    writer.write_whitespace(" ");
+    
+    for x in second_half.iter().copied() {
+        let mut ascii = x as char;
+        if x & 0x80 == 1 || !ascii.is_ascii_graphic() {
+            ascii = '.';
+        }
+        
+        writer.write_char(LineColor::Regular, ascii);
+    }
+    
+    writer.flush();
     Ok(())
 }

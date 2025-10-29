@@ -1,12 +1,13 @@
 use std::fmt::{Arguments, Write};
 
 use anyhow::{Error, Result};
-use ratatui::{Frame, layout::Rect, style::{Color, Style}, text::Span};
+use ratatui::{Frame, layout::Rect, style::{Color, Modifier, Style}, text::Span};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineColor {
     Address,
     Regular,
+    RegularBold,
     Zero,
 }
 
@@ -16,6 +17,8 @@ impl LineColor {
             LineColor::Address => Style::new()
                 .fg(Color::Indexed(206)),
             LineColor::Regular => Style::new(),
+            LineColor::RegularBold => Style::new()
+                .add_modifier(Modifier::BOLD),
             LineColor::Zero => Style::new()
                 .fg(Color::DarkGray),
         }
