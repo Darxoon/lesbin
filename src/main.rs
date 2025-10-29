@@ -2,7 +2,7 @@ use std::{env, fmt::Write, fs, io::ErrorKind, process::exit};
 
 use color_eyre::Result;
 use crossterm::event::{self, Event};
-use ratatui::{DefaultTerminal, Frame, layout::{Margin, Rect}, style::{Color, Style}, text::{Span, Text}};
+use ratatui::{DefaultTerminal, Frame, layout::Margin, style::{Color, Style}, text::Span};
 
 fn main() -> Result<()> {
     color_eyre::install()?;
@@ -58,27 +58,59 @@ fn draw(frame: &mut Frame, input_bytes: &[u8]) {
     let area = frame.area().inner(Margin::new(2, 1));
     let mut row_buffer = String::new();
     
-    for (i, row) in area.rows().enumerate() {
+    for (i, mut row) in area.rows().enumerate() {
         let offset = i * 0x10;
         
         const ADDR_STYLE: Style = Style::new()
             .fg(Color::Indexed(206));
+        const ZERO_STYLE: Style = Style::new()
+            .fg(Color::DarkGray);
         
         // Write offset
         row_buffer.clear();
         write!(row_buffer, "{:04x} {:04x}", offset >> 16, offset & 0xFFFF).unwrap();
         frame.render_widget(Span::styled(&row_buffer, ADDR_STYLE), row);
+        row.x += 9;
+        row.width -= 9;
+        
+        frame.render_widget(":  ", row);
+        row.x += 3;
+        row.width -= 3;
         
         // Write byte values
         row_buffer.clear();
-        row_buffer.push_str(":  ");
+        let mut prev_is_zero = input_bytes[offset] == 0;
+        
+        let mut write_byte = |is_zero: bool, row_buffer: &mut String| {
+            let style = match is_zero {
+                true => ZERO_STYLE,
+                false => Style::default(),
+            };
+            
+            frame.render_widget(Span::styled(&*row_buffer, style), row);
+            row.x += row_buffer.len() as u16;
+            row.width -= row_buffer.len() as u16;
+            row_buffer.clear();
+        };
+        
         for x in input_bytes[offset..offset + 0x8].iter().copied() {
+            if prev_is_zero != (x == 0) {
+                write_byte(prev_is_zero, &mut row_buffer);
+            }
             write!(row_buffer, "{x:02x} ").unwrap();
+            prev_is_zero = x == 0;
         }
+        
         row_buffer.push(' ');
         for x in input_bytes[offset + 0x8..offset + 0x10].iter().copied() {
+            if prev_is_zero != (x == 0) {
+                write_byte(prev_is_zero, &mut row_buffer);
+            }
             write!(row_buffer, "{x:02x} ").unwrap();
+            prev_is_zero = x == 0;
         }
+        
+        write_byte(prev_is_zero, &mut row_buffer);
         
         // Write ascii text
         row_buffer.push(' ');
@@ -101,7 +133,6 @@ fn draw(frame: &mut Frame, input_bytes: &[u8]) {
             write!(row_buffer, "{ascii}").unwrap();
         }
         
-        let row = Rect::new(row.x + 9, row.y, row.width - 9,  row.height);
         frame.render_widget(&row_buffer, row);
     }
 }
