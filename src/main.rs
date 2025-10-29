@@ -1,12 +1,14 @@
-use std::{env, fmt::Write, fs, io::ErrorKind, process::exit};
+use std::{borrow::Cow, env, fs, io::{ErrorKind}, process::exit};
 
-use color_eyre::Result;
-use crossterm::event::{self, Event};
+use anyhow::Result;
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{DefaultTerminal, Frame, layout::Margin, style::{Color, Style}, text::Span};
 
+use crate::util::{LineColor, LineWriter};
+
+mod util;
+
 fn main() -> Result<()> {
-    color_eyre::install()?;
-    
     // Parse args
     let mut input_file = None;
     for arg in env::args().skip(1) {
@@ -40,99 +42,146 @@ fn main() -> Result<()> {
     
     // Run TUI
     let terminal = ratatui::init();
-    let result = run(terminal, &input_bytes);
+    let result = run(terminal, State::new(&input_file, &input_bytes));
     ratatui::restore();
     result
 }
 
-fn run(mut terminal: DefaultTerminal, input_bytes: &[u8]) -> Result<()> {
-    loop {
-        terminal.draw(|frame| draw(frame, input_bytes))?;
-        if matches!(event::read()?, Event::Key(_)) {
-            break Ok(());
+struct State<'a> {
+    scroll_pos: usize,
+    max_rows: usize,
+    
+    file_name: &'a str,
+    input_bytes: &'a [u8],
+    
+    bottom_text: Cow<'static, str>,
+}
+
+impl<'a> State<'a> {
+    fn new(file_name: &'a str, input_bytes: &'a [u8]) -> Self {
+        Self {
+            scroll_pos: 0,
+            max_rows: input_bytes.len().div_ceil(16),
+            file_name,
+            input_bytes,
+            bottom_text: Cow::Borrowed(HELP_TEXT),
         }
     }
 }
 
-fn draw(frame: &mut Frame, input_bytes: &[u8]) {
-    let area = frame.area().inner(Margin::new(2, 1));
-    let mut row_buffer = String::new();
-    
-    for (i, mut row) in area.rows().enumerate() {
-        let offset = i * 0x10;
+fn run(mut terminal: DefaultTerminal, mut state: State<'_>) -> Result<()> {
+    loop {
+        terminal.draw(|frame| draw(frame, &state).unwrap())?;
         
-        const ADDR_STYLE: Style = Style::new()
-            .fg(Color::Indexed(206));
-        const ZERO_STYLE: Style = Style::new()
-            .fg(Color::DarkGray);
+        match event::read()? {
+            Event::Key(key_event) => {
+                // special case for Ctrl C
+                if let KeyCode::Char('c') = key_event.code && key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                    return Ok(());
+                }
+                
+                match key_event.code {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        state.scroll_pos = state.scroll_pos.saturating_sub(1);
+                    },
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if state.scroll_pos < state.max_rows {
+                            state.scroll_pos += 1;
+                        }
+                    },
+                    KeyCode::Esc | KeyCode::Char('q') => {
+                        return Ok(());
+                    },
+                    _ => {},
+                }
+            },
+            _ => {},
+        }
+    }
+}
+
+const TITLE_STYLE: Style = Style::new()
+    .fg(Color::Black)
+    .bg(Color::Rgb(220, 220, 220));
+
+const HELP_TEXT: &str = "Q exit, J/Down Scroll Down, K/Up Scroll Up";
+
+fn draw(frame: &mut Frame, state: &State<'_>) -> Result<()> {
+    frame.render_widget(Span::styled(state.file_name, TITLE_STYLE), frame.area());
+    frame.render_widget(Span::raw(&*state.bottom_text),
+        frame.area().rows().last().unwrap());
+    
+    let area = frame.area().inner(Margin::new(2, 2));
+    
+    for (i, row) in area.rows().enumerate() {
+        if i >= state.max_rows {
+            break;
+        }
+        
+        let offset = (i + state.scroll_pos) * 0x10;
+        
+        let mut writer = LineWriter::new(frame, row);
         
         // Write offset
-        row_buffer.clear();
-        write!(row_buffer, "{:04x} {:04x}", offset >> 16, offset & 0xFFFF).unwrap();
-        frame.render_widget(Span::styled(&row_buffer, ADDR_STYLE), row);
-        row.x += 9;
-        row.width -= 9;
+        writer.write(LineColor::Address, format_args!("{:04x} {:04x}", offset >> 16, offset & 0xFFFF))?;
+        writer.write_str(LineColor::Regular, ":  ");
         
-        frame.render_widget(":  ", row);
-        row.x += 3;
-        row.width -= 3;
+        let first_half = &state.input_bytes[offset..usize::min(
+            offset + 0x8, 
+            state.input_bytes.len(),
+        )];
+        let second_half = &state.input_bytes[usize::min(
+            offset + 0x8, 
+            state.input_bytes.len(),
+        )..usize::min(
+            offset + 0x10, 
+            state.input_bytes.len(),
+        )];
         
-        // Write byte values
-        row_buffer.clear();
-        let mut prev_is_zero = input_bytes[offset] == 0;
-        
-        let mut write_byte = |is_zero: bool, row_buffer: &mut String| {
-            let style = match is_zero {
-                true => ZERO_STYLE,
-                false => Style::default(),
-            };
-            
-            frame.render_widget(Span::styled(&*row_buffer, style), row);
-            row.x += row_buffer.len() as u16;
-            row.width -= row_buffer.len() as u16;
-            row_buffer.clear();
+        let color_of = |x: u8| {
+            if x == 0 {
+                LineColor::Zero
+            } else {
+                LineColor::Regular
+            }
         };
         
-        for x in input_bytes[offset..offset + 0x8].iter().copied() {
-            if prev_is_zero != (x == 0) {
-                write_byte(prev_is_zero, &mut row_buffer);
-            }
-            write!(row_buffer, "{x:02x} ").unwrap();
-            prev_is_zero = x == 0;
+        // Write byte values
+        for x in first_half.iter().copied() {
+            writer.write(color_of(x), format_args!("{x:02x} "))?;
         }
         
-        row_buffer.push(' ');
-        for x in input_bytes[offset + 0x8..offset + 0x10].iter().copied() {
-            if prev_is_zero != (x == 0) {
-                write_byte(prev_is_zero, &mut row_buffer);
-            }
-            write!(row_buffer, "{x:02x} ").unwrap();
-            prev_is_zero = x == 0;
-        }
+        writer.write_whitespace(" ");
         
-        write_byte(prev_is_zero, &mut row_buffer);
+        for x in second_half.iter().copied() {
+            writer.write(color_of(x), format_args!("{x:02x} "))?;
+        }
         
         // Write ascii text
-        row_buffer.push(' ');
+        writer.seek(64);
         
-        for x in input_bytes[offset..offset + 0x8].iter().copied() {
+        for x in first_half.iter().copied() {
             let mut ascii = x as char;
             if x & 0x80 == 1 || !ascii.is_ascii_graphic() {
                 ascii = '.';
             }
             
-            write!(row_buffer, "{ascii}").unwrap();
+            writer.write_char(LineColor::Regular, ascii);
         }
-        row_buffer.push(' ');
-        for x in input_bytes[offset + 0x8..offset + 0x10].iter().copied() {
+        
+        writer.write_whitespace(" ");
+        
+        for x in second_half.iter().copied() {
             let mut ascii = x as char;
             if x & 0x80 == 1 || !ascii.is_ascii_graphic() {
                 ascii = '.';
             }
             
-            write!(row_buffer, "{ascii}").unwrap();
+            writer.write_char(LineColor::Regular, ascii);
         }
         
-        frame.render_widget(&row_buffer, row);
+        writer.flush();
     }
+    
+    Ok(())
 }
