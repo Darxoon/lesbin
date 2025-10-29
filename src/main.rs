@@ -177,7 +177,7 @@ fn handle_key(event: KeyEvent, state: &mut State<'_>) -> bool {
         KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
             if let Some((row, _)) = &mut state.selection {
                 // Move cursor down if it's not at maximum height
-                if *row < state.max_rows {
+                if *row < state.max_rows - 1 {
                     *row += 1;
                 }
                 
@@ -251,6 +251,10 @@ fn handle_key(event: KeyEvent, state: &mut State<'_>) -> bool {
 }
 
 fn handle_mouse(event: MouseEvent, state: &mut State<'_>) {
+    if state.goto_buffer.is_some() {
+        return;
+    }
+    
     match event.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             let mut row = (event.row as usize).saturating_sub(2);
