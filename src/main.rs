@@ -199,14 +199,14 @@ fn run(mut terminal: DefaultTerminal, mut state: State<'_>) -> Result<()> {
                             if col >= 0x10 {
                                 col = 0xf;
                             }
-                            state.selection = Some((row, col + 0x10));
+                            state.selection = Some((row + state.scroll_pos, col + 0x10));
                         } else {
                             let raw_col = (mouse_event.column as usize).saturating_sub(0xe);
                             let mut col = raw_col / 3 * 2;
                             if mouse_event.modifiers.contains(KeyModifiers::ALT) {
                                 col += raw_col % 3;
                             }
-                            state.selection = Some((row, col));
+                            state.selection = Some((row + state.scroll_pos, col));
                         }
                     },
                     _ => {},
