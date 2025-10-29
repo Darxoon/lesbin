@@ -5,20 +5,24 @@ use ratatui::{Frame, layout::Rect, style::{Color, Modifier, Style}, text::Span};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineColor {
-    Address,
     Regular,
     RegularBold,
+    Highlighted,
+    Address,
     Zero,
 }
 
 impl LineColor {
-    pub const fn style(self) -> Style {
+    const fn style(self) -> Style {
         match self {
-            LineColor::Address => Style::new()
-                .fg(Color::Indexed(206)),
             LineColor::Regular => Style::new(),
             LineColor::RegularBold => Style::new()
                 .add_modifier(Modifier::BOLD),
+            LineColor::Highlighted => Style::new()
+                .fg(Color::Black)
+                .bg(Color::Gray),
+            LineColor::Address => Style::new()
+                .fg(Color::Indexed(206)),
             LineColor::Zero => Style::new()
                 .fg(Color::DarkGray),
         }
