@@ -8,6 +8,7 @@ pub enum LineColor {
     Regular,
     RegularBold,
     Highlighted,
+    TextCursor,
     Address,
     Zero,
 }
@@ -21,6 +22,8 @@ impl LineColor {
             LineColor::Highlighted => Style::new()
                 .fg(Color::Black)
                 .bg(Color::Gray),
+            LineColor::TextCursor => Style::new()
+                .add_modifier(Modifier::REVERSED),
             LineColor::Address => Style::new()
                 .fg(Color::Indexed(206)),
             LineColor::Zero => Style::new()

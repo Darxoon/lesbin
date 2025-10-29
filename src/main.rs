@@ -1,7 +1,7 @@
 use std::{env, fs, io::{ErrorKind, stdout}, process::exit};
 
 use anyhow::Result;
-use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind}, execute};
+use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind}, execute};
 use ratatui::{DefaultTerminal, Frame, layout::{Margin, Rect}, style::{Color, Style}, text::Span};
 
 use crate::util::{LineColor, LineWriter};
@@ -68,6 +68,7 @@ struct State<'a> {
     max_rows: usize,
     
     selection: Option<(usize, usize)>,
+    goto_buffer: Option<String>,
     
     area: Rect,
     
@@ -83,6 +84,7 @@ impl<'a> State<'a> {
             scroll_pos: 0,
             max_rows: input_bytes.len().div_ceil(16),
             selection: None,
+            goto_buffer: None,
             area: Rect::default(),
             file_name,
             input_bytes,
@@ -106,114 +108,176 @@ fn run(mut terminal: DefaultTerminal, mut state: State<'_>) -> Result<()> {
                     return Ok(());
                 }
                 
-                match key_event.code {
-                    KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                        if let Some((row, _)) = &mut state.selection {
-                            // Move cursor up if it's not at maximum height
-                            *row = row.saturating_sub(1);
+                // Go to menu
+                if state.goto_buffer.is_some() {
+                    match key_event.code {
+                        KeyCode::Backspace => {
+                            state.goto_buffer.as_mut().unwrap().pop();
+                        },
+                        KeyCode::Char(c) => {
+                            if c == 'q' || c == 'Q' {
+                                return Ok(());
+                            }
+                            if c.is_ascii_hexdigit() {
+                                state.goto_buffer.as_mut().unwrap().push(c);
+                            }
+                        },
+                        KeyCode::Enter => {
+                            let goto_buffer = state.goto_buffer.as_ref().unwrap();
+                            let Ok(goto_offset) = usize::from_str_radix(goto_buffer, 16) else {
+                                continue;
+                            };
                             
-                            // Scroll up if cursor goes out of bounds
-                            if *row < state.scroll_pos {
-                                state.scroll_pos = state.scroll_pos.saturating_sub(1);
-                            }
-                        } else {
-                            // Scroll up if it's not at maximum height
-                            state.scroll_pos = state.scroll_pos.saturating_sub(1);
-                        }
-                    },
-                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                        if let Some((row, _)) = &mut state.selection {
-                            // Move cursor down if it's not at maximum height
-                            if *row < state.max_rows {
-                                *row += 1;
+                            if goto_offset >= state.input_bytes.len() {
+                                continue;
                             }
                             
-                            // Scroll down if cursor goes out of bounds
-                            if *row >= state.scroll_pos + state.visible_content_rows() {
-                                state.scroll_pos += 1;
-                            }
-                        } else {
-                            // Scroll down if it's not at maximum height
-                            if state.scroll_pos < state.max_rows {
-                                state.scroll_pos += 1;
-                            }
+                            state.scroll_pos = goto_offset / 0x10;
+                            state.selection = Some((goto_offset / 0x10, (goto_offset % 0x10) * 2));
+                            state.goto_buffer = None;
+                        },
+                        KeyCode::Esc => {
+                            state.goto_buffer = None;
                         }
-                    },
-                    KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
-                        if let Some((_, col)) = &mut state.selection {
-                            if !key_event.modifiers.contains(KeyModifiers::ALT) {
-                                // Move cursor left in byte-increments (stop at left edge)
-                                *col = col.saturating_sub(2);
-                                *col = *col / 2 * 2;
-                            } else {
-                                // Move cursor left in digit-increments (stop at left edge)
-                                *col = col.saturating_sub(1);
-                            }
-                        }
-                    },
-                    KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => {
-                        if let Some((_, col)) = &mut state.selection {
-                            if !key_event.modifiers.contains(KeyModifiers::ALT) {
-                                // Move cursor right in byte-increments (stop at right edge)
-                                if *col < 0x1e {
-                                    *col += 2;
-                                    *col = *col / 2 * 2;
-                                }
-                            } else {
-                                // Move cursor right in digit-increments (stop at right edge)
-                                if *col < 0x1f {
-                                    *col += 1;
-                                }
-                            }
-                        }
-                    },
-                    KeyCode::Char('c') => {
-                        // Toggle pager and selection mode
-                        if state.selection.is_some() {
-                            state.selection = None;
-                        } else {
-                            state.selection = Some((state.scroll_pos, 0));
-                        }
+                        _ => {},
                     }
-                    KeyCode::Esc | KeyCode::Char('q') => {
-                        // Quit
-                        return Ok(());
-                    },
-                    _ => {},
+                    
+                    continue;
+                }
+                
+                if !handle_key(key_event, &mut state) {
+                    // Quit if it returns false
+                    return Ok(());
                 }
             },
             Event::Mouse(mouse_event) => {
-                match mouse_event.kind {
-                    MouseEventKind::Down(MouseButton::Left) => {
-                        let mut row = (mouse_event.row as usize).saturating_sub(2);
-                        if row >= state.visible_content_rows() {
-                            row = state.visible_content_rows() - 1;
-                        }
-                        
-                        if mouse_event.column >= 0x27 {
-                            let raw_col = (mouse_event.column as usize).saturating_sub(0x27);
-                            let mut col = raw_col / 3 * 2;
-                            if mouse_event.modifiers.contains(KeyModifiers::ALT) {
-                                col += raw_col % 3;
-                            }
-                            if col >= 0x10 {
-                                col = 0xf;
-                            }
-                            state.selection = Some((row + state.scroll_pos, col + 0x10));
-                        } else {
-                            let raw_col = (mouse_event.column as usize).saturating_sub(0xe);
-                            let mut col = raw_col / 3 * 2;
-                            if mouse_event.modifiers.contains(KeyModifiers::ALT) {
-                                col += raw_col % 3;
-                            }
-                            state.selection = Some((row + state.scroll_pos, col));
-                        }
-                    },
-                    _ => {},
-                }
+                handle_mouse(mouse_event, &mut state);
             },
             _ => {},
         }
+    }
+}
+
+fn handle_key(event: KeyEvent, state: &mut State<'_>) -> bool {
+    match event.code {
+        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+            if let Some((row, _)) = &mut state.selection {
+                // Move cursor up if it's not at maximum height
+                *row = row.saturating_sub(1);
+                
+                // Scroll up if cursor goes out of bounds
+                if *row < state.scroll_pos {
+                    state.scroll_pos = state.scroll_pos.saturating_sub(1);
+                }
+            } else {
+                // Scroll up if it's not at maximum height
+                state.scroll_pos = state.scroll_pos.saturating_sub(1);
+            }
+        },
+        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+            if let Some((row, _)) = &mut state.selection {
+                // Move cursor down if it's not at maximum height
+                if *row < state.max_rows {
+                    *row += 1;
+                }
+                
+                // Scroll down if cursor goes out of bounds
+                if *row >= state.scroll_pos + state.visible_content_rows() {
+                    state.scroll_pos += 1;
+                }
+            } else {
+                // Scroll down if it's not at maximum height
+                if state.scroll_pos < state.max_rows {
+                    state.scroll_pos += 1;
+                }
+            }
+        },
+        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
+            if let Some((_, col)) = &mut state.selection {
+                if !event.modifiers.contains(KeyModifiers::ALT) {
+                    // Move cursor left in byte-increments (stop at left edge)
+                    *col = col.saturating_sub(2);
+                    *col = *col / 2 * 2;
+                } else {
+                    // Move cursor left in digit-increments (stop at left edge)
+                    *col = col.saturating_sub(1);
+                }
+            }
+        },
+        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => {
+            if let Some((_, col)) = &mut state.selection {
+                if !event.modifiers.contains(KeyModifiers::ALT) {
+                    // Move cursor right in byte-increments (stop at right edge)
+                    if *col < 0x1e {
+                        *col += 2;
+                        *col = *col / 2 * 2;
+                    }
+                } else {
+                    // Move cursor right in digit-increments (stop at right edge)
+                    if *col < 0x1f {
+                        *col += 1;
+                    }
+                }
+            }
+        },
+        KeyCode::Char('c') => {
+            // Toggle pager and selection mode
+            if state.selection.is_some() {
+                state.selection = None;
+            } else {
+                state.selection = Some((state.scroll_pos, 0));
+            }
+        },
+        KeyCode::Char('g') => {
+            state.goto_buffer = Some(String::new());
+        }
+        KeyCode::Esc => {
+            if state.selection.is_some() {
+                // Go back to pager if in cursor mode
+                state.selection = None;
+            } else {
+                // Quit if in pager mode
+                return false;
+            }
+        }
+        KeyCode::Char('q') => {
+            // Quit
+            return false;
+        },
+        _ => {},
+    }
+    
+    true
+}
+
+fn handle_mouse(event: MouseEvent, state: &mut State<'_>) {
+    match event.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            let mut row = (event.row as usize).saturating_sub(2);
+            if row >= state.visible_content_rows() {
+                row = state.visible_content_rows() - 1;
+            }
+            
+            if event.column >= 0x27 {
+                let raw_col = (event.column as usize).saturating_sub(0x27);
+                let mut col = raw_col / 3 * 2;
+                if event.modifiers.contains(KeyModifiers::ALT) {
+                    col += raw_col % 3;
+                }
+                if col >= 0x10 {
+                    col = 0xf;
+                }
+                state.selection = Some((row + state.scroll_pos, col + 0x10));
+            } else {
+                let raw_col = (event.column as usize).saturating_sub(0xe);
+                let mut col = raw_col / 3 * 2;
+                if event.modifiers.contains(KeyModifiers::ALT) {
+                    col += raw_col % 3;
+                }
+                state.selection = Some((row + state.scroll_pos, col));
+            }
+        },
+        _ => {},
     }
 }
 
@@ -243,7 +307,12 @@ fn draw(frame: &mut Frame, state: &mut State<'_>) -> Result<()> {
 fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
     let mut writer = LineWriter::new(frame, row);
     
-    if let Some(bottom_text) = state.bottom_text.as_deref() {
+    if let Some(goto_buffer) = state.goto_buffer.as_deref() {
+        writer.write_str(LineColor::RegularBold, "Go to: 0x");
+        writer.write_str(LineColor::Regular, goto_buffer);
+        // TODO: figure out blinking cursor
+        writer.write_char(LineColor::TextCursor, ' ');
+    } else if let Some(bottom_text) = state.bottom_text.as_deref() {
         writer.write_str(LineColor::Regular, bottom_text);
     } else if state.selection.is_some() {
         writer.write_str(LineColor::RegularBold, "Q");
