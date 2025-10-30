@@ -308,6 +308,41 @@ fn handle_key(event: KeyEvent, state: &mut State<'_>) -> bool {
                 }
             }
         },
+        KeyCode::Home => {
+            if event.modifiers.contains(KeyModifiers::CONTROL) {
+                state.scroll_pos = 0;
+            }
+            
+            if let Some((row, col)) = &mut state.selection {
+                if event.modifiers.contains(KeyModifiers::CONTROL) {
+                    *row = 0;
+                    *col = 0;
+                } else {
+                    *col = 0;
+                }
+            }
+        },
+        KeyCode::End => {
+            if event.modifiers.contains(KeyModifiers::CONTROL) {
+                state.scroll_pos = usize::max(
+                    state.scroll_pos,
+                    state.bytes.len() / 0x10 - (state.area.height as usize - 4) + 1,
+                );
+            }
+            
+            if let Some((row, col)) = &mut state.selection {
+                if event.modifiers.contains(KeyModifiers::CONTROL) {
+                    *row = state.bytes.len() / 0x10;
+                    *col = (state.bytes.len() % 0x10) * 2 - 1;
+                } else {
+                    *col = 0x1f;
+                }
+                
+                if !event.modifiers.contains(KeyModifiers::ALT) {
+                    *col -= 1;
+                }
+            }
+        },
         KeyCode::Char('c') => {
             // Toggle pager and selection mode
             if state.selection.is_some() {
