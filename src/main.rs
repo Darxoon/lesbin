@@ -1,10 +1,27 @@
-use std::{collections::HashMap, env, fs, io::{ErrorKind, stdout}, mem, process::exit};
+use std::{
+    collections::HashMap,
+    env, fs,
+    io::{ErrorKind, stdout},
+    mem,
+    process::exit,
+};
 
 use anyhow::{Error, Result};
-use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind}, execute};
+use crossterm::{
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        MouseButton, MouseEvent, MouseEventKind,
+    },
+    execute,
+};
 use itertools::Itertools;
 use memchr::memmem;
-use ratatui::{DefaultTerminal, Frame, layout::{Margin, Rect}, style::{Color, Style}, text::{Span, Text}};
+use ratatui::{
+    DefaultTerminal, Frame,
+    layout::{Margin, Rect},
+    style::{Color, Style},
+    text::{Span, Text},
+};
 
 use crate::util::{LineColor, LineWriter};
 
@@ -175,6 +192,7 @@ fn run(mut terminal: DefaultTerminal, mut state: State<'_>) -> Result<()> {
                     InputState::Regular => {
                         if !handle_key(key_event, &mut state) {
                             // Quit if it returns false
+                            // TODO: ask if unsaved changes
                             return Ok(());
                         }
                     },
@@ -223,6 +241,9 @@ fn run(mut terminal: DefaultTerminal, mut state: State<'_>) -> Result<()> {
                     },
                     InputState::Find => {
                         match key_event.code {
+                            KeyCode::Esc => {
+                                state.queued_input_state = Some(InputState::Regular);
+                            }
                             KeyCode::Char('b') => {
                                 state.queued_input_state = Some(InputState::FindBytes(String::new()));
                             },
@@ -482,24 +503,24 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
     let (save_color, save_color_bold) = if state.modified_bytes.is_empty() {
         (LineColor::Zero, LineColor::Zero)
     } else {
-        (LineColor::Regular, LineColor::RegularBold)
+        (LineColor::Regular, LineColor::Emphasis)
     };
     
     match &state.input_state {
         InputState::Goto(goto_buffer) => {
-            writer.write_str(LineColor::RegularBold, "Go to: 0x");
+            writer.write_str(LineColor::Emphasis, "Go to: 0x");
             writer.write_str(LineColor::Regular, goto_buffer);
             // TODO: figure out blinking cursor
             writer.write_char(LineColor::TextCursor, ' ');
         },
         InputState::Find => {
-            writer.write_str(LineColor::RegularBold, "Find what?  B");
+            writer.write_str(LineColor::Emphasis, "Find what?  B");
             writer.write_str(LineColor::Regular, " bytes, ");
-            writer.write_str(LineColor::RegularBold, "T");
+            writer.write_str(LineColor::Emphasis, "T");
             writer.write_str(LineColor::Regular, " text");
         },
         InputState::FindBytes(byte_buffer) => {
-            writer.write_str(LineColor::RegularBold, "Find byte sequence (in hex): ");
+            writer.write_str(LineColor::Emphasis, "Find byte sequence (in hex): ");
             
             let chunks = byte_buffer.chars().chunks(2);
             for (i, chunk) in chunks.into_iter().enumerate() {
@@ -515,7 +536,7 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
             writer.write_char(LineColor::TextCursor, ' ');
         },
         InputState::FindString(string_buffer) => {
-            writer.write_str(LineColor::RegularBold, "Find text: ");
+            writer.write_str(LineColor::Emphasis, "Find text: ");
             writer.write_str(LineColor::Regular, string_buffer);
             writer.write_char(LineColor::TextCursor, ' ');
         },
@@ -523,34 +544,34 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
             if let Some(bottom_text) = state.bottom_text.as_deref() {
                 writer.write_str(LineColor::Regular, bottom_text);
             } else if state.selection.is_some() {
-                writer.write_str(LineColor::RegularBold, "Q");
+                writer.write_str(LineColor::Emphasis, "Q");
                 writer.write_str(LineColor::Regular, " exit, ");
-                writer.write_str(LineColor::RegularBold, "C");
+                writer.write_str(LineColor::Emphasis, "C");
                 writer.write_str(LineColor::Regular, " pager, ");
-                writer.write_str(LineColor::RegularBold, "G");
+                writer.write_str(LineColor::Emphasis, "G");
                 writer.write_str(LineColor::Regular, " go to, ");
-                writer.write_str(LineColor::RegularBold, "F");
+                writer.write_str(LineColor::Emphasis, "F");
                 writer.write_str(LineColor::Regular, " find, ");
                 writer.write_str(save_color_bold, "^S");
                 writer.write_str(save_color, " save, ");
-                writer.write_str(LineColor::RegularBold, "HJKL/Arrows");
+                writer.write_str(LineColor::Emphasis, "HJKL/Arrows");
                 writer.write_str(LineColor::Regular, " move selection (");
-                writer.write_str(LineColor::RegularBold, "Alt");
+                writer.write_str(LineColor::Emphasis, "Alt");
                 writer.write_str(LineColor::Regular, " to move by digits) ");
             } else {
-                writer.write_str(LineColor::RegularBold, "Q");
+                writer.write_str(LineColor::Emphasis, "Q");
                 writer.write_str(LineColor::Regular, " exit, ");
-                writer.write_str(LineColor::RegularBold, "C");
+                writer.write_str(LineColor::Emphasis, "C");
                 writer.write_str(LineColor::Regular, " cursor, ");
-                writer.write_str(LineColor::RegularBold, "G");
+                writer.write_str(LineColor::Emphasis, "G");
                 writer.write_str(LineColor::Regular, " go to, ");
-                writer.write_str(LineColor::RegularBold, "F");
+                writer.write_str(LineColor::Emphasis, "F");
                 writer.write_str(LineColor::Regular, " find, ");
                 writer.write_str(save_color_bold, "^S");
                 writer.write_str(save_color, " save, ");
-                writer.write_str(LineColor::RegularBold, "J/Down");
+                writer.write_str(LineColor::Emphasis, "J/Down");
                 writer.write_str(LineColor::Regular, " scroll down, ");
-                writer.write_str(LineColor::RegularBold, "K/Up");
+                writer.write_str(LineColor::Emphasis, "K/Up");
                 writer.write_str(LineColor::Regular, " scroll up ");
             }
         },

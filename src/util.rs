@@ -6,7 +6,7 @@ use ratatui::{Frame, layout::Rect, style::{Color, Modifier, Style}, text::Span};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineColor {
     Regular,
-    RegularBold,
+    Emphasis,
     Highlighted,
     TextCursor,
     Modified,
@@ -18,7 +18,8 @@ impl LineColor {
     const fn style(self) -> Style {
         match self {
             LineColor::Regular => Style::new(),
-            LineColor::RegularBold => Style::new()
+            LineColor::Emphasis => Style::new()
+                .fg(Color::Indexed(39))
                 .add_modifier(Modifier::BOLD),
             LineColor::Highlighted => Style::new()
                 .fg(Color::Black)

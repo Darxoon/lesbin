@@ -14,7 +14,8 @@ Currently, editing is not yet supported, you can only view files.
 
 Here are some things i want to implement for this:
 
-* Find bytes or text in files
+* Selecting bytes or text (+ clipboard integration)
+* Inserting bytes
 * Configuration
 * Displaying integer values of byte sequences
 * Diffing of files
