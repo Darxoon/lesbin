@@ -1,6 +1,6 @@
-use std::{env, fs, io::{ErrorKind, stdout}, process::exit};
+use std::{collections::HashMap, env, fs, io::{ErrorKind, stdout}, process::exit};
 
-use anyhow::Result;
+use anyhow::{Error, Result};
 use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind}, execute};
 use ratatui::{DefaultTerminal, Frame, layout::{Margin, Rect}, style::{Color, Style}, text::Span};
 
@@ -53,7 +53,7 @@ fn main() -> Result<()> {
     // Run TUI
     let terminal = ratatui::init();
     execute!(stdout(), EnableMouseCapture)?;
-    let result = run(terminal, State::new(&input_file, &input_bytes));
+    let result = run(terminal, State::new(&input_file, input_bytes));
     let result2 = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
     
@@ -73,23 +73,31 @@ struct State<'a> {
     area: Rect,
     
     file_name: &'a str,
-    input_bytes: &'a [u8],
+    bytes: Vec<u8>,
+    
+    modified_bytes: HashMap<usize, [bool; 0x10]>,
     
     bottom_text: Option<String>,
 }
 
 impl<'a> State<'a> {
-    fn new(file_name: &'a str, input_bytes: &'a [u8]) -> Self {
+    fn new(file_name: &'a str, bytes: Vec<u8>) -> Self {
         Self {
             scroll_pos: 0,
-            max_rows: input_bytes.len().div_ceil(16),
+            max_rows: bytes.len().div_ceil(16),
             selection: None,
             goto_buffer: None,
             area: Rect::default(),
             file_name,
-            input_bytes,
+            bytes,
+            modified_bytes: HashMap::new(),
             bottom_text: None,
         }
+    }
+    
+    fn save_file(&mut self) -> Result<()> {
+        self.modified_bytes.clear();
+        fs::write(self.file_name, &self.bytes).map_err(Error::new)
     }
     
     fn visible_content_rows(&self) -> usize {
@@ -128,7 +136,7 @@ fn run(mut terminal: DefaultTerminal, mut state: State<'_>) -> Result<()> {
                                 continue;
                             };
                             
-                            if goto_offset >= state.input_bytes.len() {
+                            if goto_offset >= state.bytes.len() {
                                 continue;
                             }
                             
@@ -230,7 +238,15 @@ fn handle_key(event: KeyEvent, state: &mut State<'_>) -> bool {
         },
         KeyCode::Char('g') => {
             state.goto_buffer = Some(String::new());
-        }
+        },
+        KeyCode::Char('s') | KeyCode::Char('S') => {
+            // TODO: Save as
+            if event.modifiers.contains(KeyModifiers::CONTROL) {
+                if let Err(err) = state.save_file() {
+                    state.bottom_text = Some(format!("Error: {err}"));
+                }
+            }
+        },
         KeyCode::Esc => {
             if state.selection.is_some() {
                 // Go back to pager if in cursor mode
@@ -243,6 +259,32 @@ fn handle_key(event: KeyEvent, state: &mut State<'_>) -> bool {
         KeyCode::Char('q') => {
             // Quit
             return false;
+        },
+        KeyCode::Char(c) => {
+            if let Some((row, col)) = &mut state.selection
+            && let Some(digit) = c.to_digit(10) {
+                let offset = *col / 2 + *row * 0x10;
+                let prev_byte = state.bytes[offset];
+                
+                let new_byte = if *col % 2 == 0 {
+                    // Modify upper half of byte
+                    (prev_byte & 0xF) | ((digit as u8) << 4)
+                } else {
+                    // Modify lower half of byte
+                    (prev_byte & 0xF0) | (digit as u8)
+                };
+                
+                if prev_byte != new_byte {
+                    state.bytes[offset] = new_byte;
+                    state.modified_bytes.entry(*row).or_default()[*col / 2] = true;
+                }
+                
+                *col += 1;
+                if *col >= 0x20 {
+                    *col = 0;
+                    *row += 1;
+                }
+            }
         },
         _ => {},
     }
@@ -311,6 +353,12 @@ fn draw(frame: &mut Frame, state: &mut State<'_>) -> Result<()> {
 fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
     let mut writer = LineWriter::new(frame, row);
     
+    let (save_color, save_color_bold) = if state.modified_bytes.is_empty() {
+        (LineColor::Zero, LineColor::Zero)
+    } else {
+        (LineColor::Regular, LineColor::RegularBold)
+    };
+    
     if let Some(goto_buffer) = state.goto_buffer.as_deref() {
         writer.write_str(LineColor::RegularBold, "Go to: 0x");
         writer.write_str(LineColor::Regular, goto_buffer);
@@ -325,6 +373,8 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
         writer.write_str(LineColor::Regular, " pager, ");
         writer.write_str(LineColor::RegularBold, "G");
         writer.write_str(LineColor::Regular, " go to, ");
+        writer.write_str(save_color_bold, "^S");
+        writer.write_str(save_color, " save, ");
         writer.write_str(LineColor::RegularBold, "HJKL/Arrows");
         writer.write_str(LineColor::Regular, " move selection (");
         writer.write_str(LineColor::RegularBold, "Alt");
@@ -336,6 +386,8 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
         writer.write_str(LineColor::Regular, " cursor, ");
         writer.write_str(LineColor::RegularBold, "G");
         writer.write_str(LineColor::Regular, " go to, ");
+        writer.write_str(save_color_bold, "^S");
+        writer.write_str(save_color, " save, ");
         writer.write_str(LineColor::RegularBold, "J/Down");
         writer.write_str(LineColor::Regular, " scroll down, ");
         writer.write_str(LineColor::RegularBold, "K/Up");
@@ -349,6 +401,8 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
 fn draw_line(frame: &mut Frame, state: &State<'_>, row: Rect, row_idx: usize) -> Result<()> {
     let offset = row_idx * 0x10;
     
+    let modified_bytes = state.modified_bytes.get(&row_idx).copied().unwrap_or_default();
+    
     let selected_col = match state.selection {
         Some((row, col)) => (row_idx == row).then_some(col),
         None => None,
@@ -360,20 +414,22 @@ fn draw_line(frame: &mut Frame, state: &State<'_>, row: Rect, row_idx: usize) ->
     writer.write(LineColor::Address, format_args!("{:04x} {:04x}", offset >> 16, offset & 0xFFFF))?;
     writer.write_str(LineColor::Regular, ":  ");
     
-    let first_half = &state.input_bytes[offset..usize::min(
+    let first_half = &state.bytes[offset..usize::min(
         offset + 0x8, 
-        state.input_bytes.len(),
+        state.bytes.len(),
     )];
-    let second_half = &state.input_bytes[usize::min(
+    let second_half = &state.bytes[usize::min(
         offset + 0x8, 
-        state.input_bytes.len(),
+        state.bytes.len(),
     )..usize::min(
         offset + 0x10, 
-        state.input_bytes.len(),
+        state.bytes.len(),
     )];
     
-    let color_of = |x: u8| {
-        if x == 0 {
+    let color_of = |col: usize, x: u8| {
+        if modified_bytes[col] {
+            LineColor::Modified
+        } else if x == 0 {
             LineColor::Zero
         } else {
             LineColor::Regular
@@ -385,17 +441,17 @@ fn draw_line(frame: &mut Frame, state: &State<'_>, row: Rect, row_idx: usize) ->
         if let Some(selected_col) = selected_col {
             if selected_col / 2 == col && selected_col % 2 == 0 {
                 writer.write(LineColor::Highlighted, format_args!("{:01x}", x >> 4))?;
-                writer.write(color_of(x), format_args!("{:01x} ", x & 0xF))?;
+                writer.write(color_of(col, x), format_args!("{:01x} ", x & 0xF))?;
                 return Ok(());
             } else if selected_col / 2 == col && selected_col % 2 == 1 {
-                writer.write(color_of(x), format_args!("{:01x}", x >> 4))?;
+                writer.write(color_of(col, x), format_args!("{:01x}", x >> 4))?;
                 writer.write(LineColor::Highlighted, format_args!("{:01x}", x & 0xF))?;
                 writer.write_char(LineColor::Regular, ' ');
                 return Ok(());
             }
         }
         
-        writer.write(color_of(x), format_args!("{:02x} ", x))?;
+        writer.write(color_of(col, x), format_args!("{:02x} ", x))?;
         Ok(())
     };
     

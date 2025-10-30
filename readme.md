@@ -18,3 +18,4 @@ Here are some things i want to implement for this:
 * Find bytes or text in files
 * Configuration
 * Displaying integer values of byte sequences
+* Diffing of files
