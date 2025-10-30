@@ -1,0 +1,23 @@
+# [behavior]
+# start_with_cursor = false
+# quit_with_ctrl_c = true
+
+[keybinds]
+# Basic functionality
+quit = "Q"
+save = "^S"
+
+# Basic navigation
+left = "H"
+down = "J"
+up = "K"
+right = "L"
+
+# Toggles between cursor mode and pager mode
+toggle_cursor = "C"
+
+# Utilities
+go_to = "G"
+find = "F"
+find_binary = "B"
+find_text = "T"

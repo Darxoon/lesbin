@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
-    env, fs,
-    io::{ErrorKind, stdout},
+    env, fs::{self, OpenOptions},
+    io::{ErrorKind, Read, Write, stdout},
     mem,
     process::exit,
 };
@@ -23,11 +23,37 @@ use ratatui::{
     text::{Span, Text},
 };
 
-use crate::util::{LineColor, LineWriter};
+use crate::{cfg::{Config, Keybinds}, util::{LineColor, LineWriter}};
 
+mod cfg;
 mod util;
 
+const DEFAULT_CONFIG: &str = include_str!("res/default_config.toml");
+
 fn main() -> Result<()> {
+    let mut config_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open("testing/config.toml")?;
+    
+    let config: Config = if config_file.metadata()?.len() == 0 {
+        config_file.write_all(DEFAULT_CONFIG.as_bytes())?;
+        toml::from_str(DEFAULT_CONFIG)?
+    } else {
+        let mut content = String::new();
+        config_file.read_to_string(&mut content)?;
+        
+        toml::from_str(&content)?
+    };
+    
+    println!("{config:#?}");
+    
+    // let test_config = Config::default();
+    // let test_config_string = toml::to_string_pretty(&test_config)?;
+    
+    // fs::write("testing/config.toml", &test_config_string)?;
+    
     // Parse args
     let mut input_file = None;
     for arg in env::args().skip(1) {
@@ -72,7 +98,7 @@ fn main() -> Result<()> {
     // Run TUI
     let terminal = ratatui::init();
     execute!(stdout(), EnableMouseCapture)?;
-    let result = run(terminal, State::new(&input_file, input_bytes));
+    let result = run(terminal, &config, State::new(&input_file, input_bytes));
     let result2 = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
     
@@ -177,7 +203,7 @@ impl<'a> State<'a> {
     }
 }
 
-fn run(mut terminal: DefaultTerminal, mut state: State<'_>) -> Result<()> {
+fn run(mut terminal: DefaultTerminal, config: &Config, mut state: State<'_>) -> Result<()> {
     loop {
         terminal.draw(|frame| draw(frame, &mut state).unwrap())?;
         
@@ -190,7 +216,7 @@ fn run(mut terminal: DefaultTerminal, mut state: State<'_>) -> Result<()> {
                 
                 match &mut state.input_state {
                     InputState::Regular => {
-                        if !handle_key(key_event, &mut state) {
+                        if !handle_key(key_event, &config.keybinds, &mut state) {
                             // Quit if it returns false
                             // TODO: ask if unsaved changes
                             return Ok(());
@@ -267,68 +293,99 @@ fn run(mut terminal: DefaultTerminal, mut state: State<'_>) -> Result<()> {
     }
 }
 
-fn handle_key(event: KeyEvent, state: &mut State<'_>) -> bool {
-    match event.code {
-        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-            if let Some((row, _)) = &mut state.selection {
-                // Move cursor up if it's not at maximum height
-                *row = row.saturating_sub(1);
-                
-                // Scroll up if cursor goes out of bounds
-                if *row < state.scroll_pos {
-                    state.scroll_pos = state.scroll_pos.saturating_sub(1);
-                }
-            } else {
-                // Scroll up if it's not at maximum height
+fn handle_key(event: KeyEvent, keybinds: &Keybinds, state: &mut State<'_>) -> bool {
+    if event.code == KeyCode::Up || keybinds.up.matches(event) {
+        // Up
+        if let Some((row, _)) = &mut state.selection {
+            // Move cursor up if it's not at maximum height
+            *row = row.saturating_sub(1);
+            
+            // Scroll up if cursor goes out of bounds
+            if *row < state.scroll_pos {
                 state.scroll_pos = state.scroll_pos.saturating_sub(1);
             }
-        },
-        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-            if let Some((row, _)) = &mut state.selection {
-                // Move cursor down if it's not at maximum height
-                if *row < state.max_rows - 1 {
-                    *row += 1;
-                }
-                
-                // Scroll down if cursor goes out of bounds
-                if *row >= state.scroll_pos + state.visible_content_rows() {
-                    state.scroll_pos += 1;
+        } else {
+            // Scroll up if it's not at maximum height
+            state.scroll_pos = state.scroll_pos.saturating_sub(1);
+        }
+    }
+    if event.code == KeyCode::Down || keybinds.down.matches(event) {
+        // Down
+        if let Some((row, _)) = &mut state.selection {
+            // Move cursor down if it's not at maximum height
+            if *row < state.max_rows - 1 {
+                *row += 1;
+            }
+            
+            // Scroll down if cursor goes out of bounds
+            if *row >= state.scroll_pos + state.visible_content_rows() {
+                state.scroll_pos += 1;
+            }
+        } else {
+            // Scroll down if it's not at maximum height
+            if state.scroll_pos < state.max_rows {
+                state.scroll_pos += 1;
+            }
+        }
+    }
+    if event.code == KeyCode::Left || keybinds.left.matches(event) {
+        // Left
+        if let Some((_, col)) = &mut state.selection {
+            if !event.modifiers.contains(KeyModifiers::ALT) {
+                // Move cursor left in byte-increments (stop at left edge)
+                *col = col.saturating_sub(2);
+                *col = *col / 2 * 2;
+            } else {
+                // Move cursor left in digit-increments (stop at left edge)
+                *col = col.saturating_sub(1);
+            }
+        }
+    }
+    if event.code == KeyCode::Right || keybinds.right.matches(event) {
+        // Right
+        if let Some((_, col)) = &mut state.selection {
+            if !event.modifiers.contains(KeyModifiers::ALT) {
+                // Move cursor right in byte-increments (stop at right edge)
+                if *col < 0x1e {
+                    *col += 2;
+                    *col = *col / 2 * 2;
                 }
             } else {
-                // Scroll down if it's not at maximum height
-                if state.scroll_pos < state.max_rows {
-                    state.scroll_pos += 1;
+                // Move cursor right in digit-increments (stop at right edge)
+                if *col < 0x1f {
+                    *col += 1;
                 }
             }
-        },
-        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
-            if let Some((_, col)) = &mut state.selection {
-                if !event.modifiers.contains(KeyModifiers::ALT) {
-                    // Move cursor left in byte-increments (stop at left edge)
-                    *col = col.saturating_sub(2);
-                    *col = *col / 2 * 2;
-                } else {
-                    // Move cursor left in digit-increments (stop at left edge)
-                    *col = col.saturating_sub(1);
-                }
-            }
-        },
-        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => {
-            if let Some((_, col)) = &mut state.selection {
-                if !event.modifiers.contains(KeyModifiers::ALT) {
-                    // Move cursor right in byte-increments (stop at right edge)
-                    if *col < 0x1e {
-                        *col += 2;
-                        *col = *col / 2 * 2;
-                    }
-                } else {
-                    // Move cursor right in digit-increments (stop at right edge)
-                    if *col < 0x1f {
-                        *col += 1;
-                    }
-                }
-            }
-        },
+        }
+    }
+    if keybinds.toggle_cursor.matches(event) {
+        // Toggle pager and selection mode
+        if state.selection.is_some() {
+            state.selection = None;
+        } else {
+            state.selection = Some((state.scroll_pos, 0));
+        }
+    }
+    if keybinds.go_to.matches(event) {
+        // Go to
+        state.queued_input_state = Some(InputState::Goto(String::new()));
+    }
+    if keybinds.find.matches(event) {
+        // Find
+        state.queued_input_state = Some(InputState::Find);
+    }
+    if keybinds.save.matches(event) {
+        // TODO: Save as
+        if let Err(err) = state.save_file() {
+            state.bottom_text = Some(format!("Error: {err}"));
+        }
+    }
+    if keybinds.quit.matches(event) {
+        // Quit
+        return false;
+    }
+    
+    match event.code {
         KeyCode::Home => {
             if event.modifiers.contains(KeyModifiers::CONTROL) {
                 state.scroll_pos = 0;
@@ -364,28 +421,6 @@ fn handle_key(event: KeyEvent, state: &mut State<'_>) -> bool {
                 }
             }
         },
-        KeyCode::Char('c') => {
-            // Toggle pager and selection mode
-            if state.selection.is_some() {
-                state.selection = None;
-            } else {
-                state.selection = Some((state.scroll_pos, 0));
-            }
-        },
-        KeyCode::Char('g') => {
-            state.queued_input_state = Some(InputState::Goto(String::new()));
-        },
-        KeyCode::Char('f') => {
-            state.queued_input_state = Some(InputState::Find);
-        },
-        KeyCode::Char('s') | KeyCode::Char('S') => {
-            // TODO: Save as
-            if event.modifiers.contains(KeyModifiers::CONTROL) {
-                if let Err(err) = state.save_file() {
-                    state.bottom_text = Some(format!("Error: {err}"));
-                }
-            }
-        },
         KeyCode::Esc => {
             if state.selection.is_some() {
                 // Go back to pager if in cursor mode
@@ -395,10 +430,6 @@ fn handle_key(event: KeyEvent, state: &mut State<'_>) -> bool {
                 return false;
             }
         }
-        KeyCode::Char('q') => {
-            // Quit
-            return false;
-        },
         KeyCode::Char(c) => {
             if let Some((row, col)) = &mut state.selection
             && let Some(digit) = c.to_digit(10) {
