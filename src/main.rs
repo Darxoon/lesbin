@@ -2,6 +2,7 @@ use std::{collections::HashMap, env, fs, io::{ErrorKind, stdout}, mem, process::
 
 use anyhow::{Error, Result};
 use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind}, execute};
+use itertools::Itertools;
 use ratatui::{DefaultTerminal, Frame, layout::{Margin, Rect}, style::{Color, Style}, text::Span};
 
 use crate::util::{LineColor, LineWriter};
@@ -67,9 +68,9 @@ fn main() -> Result<()> {
 enum InputState {
     Regular,
     Goto(String),
-    // Find,
-    // FindBytes(String),
-    // FindString(String),
+    Find,
+    FindBytes(String),
+    FindString(String),
     // SaveAs,
 }
 
@@ -107,6 +108,25 @@ impl<'a> State<'a> {
         }
     }
     
+    fn commit_input_state(&mut self) {
+        match &mut self.input_state {
+            InputState::Goto(goto_buffer) => {
+                let Ok(goto_offset) = usize::from_str_radix(goto_buffer, 16) else {
+                    return;
+                };
+                
+                if goto_offset >= self.bytes.len() {
+                    return;
+                }
+                
+                self.scroll_pos = goto_offset / 0x10;
+                self.selection = Some((goto_offset / 0x10, (goto_offset % 0x10) * 2));
+                self.queued_input_state = Some(InputState::Regular);
+            },
+            _ => panic!("State {:?} cannot be committed", self.input_state),
+        }
+    }
+    
     fn save_file(&mut self) -> Result<()> {
         self.modified_bytes.clear();
         fs::write(self.file_name, &self.bytes).map_err(Error::new)
@@ -135,39 +155,60 @@ fn run(mut terminal: DefaultTerminal, mut state: State<'_>) -> Result<()> {
                             return Ok(());
                         }
                     },
-                    InputState::Goto(goto_buffer) => {
+                    InputState::Goto(buffer) | InputState::FindBytes(buffer) => {
                         match key_event.code {
                             KeyCode::Backspace => {
-                                goto_buffer.pop();
+                                buffer.pop();
                             },
                             KeyCode::Char(c) => {
                                 if c == 'q' || c == 'Q' {
                                     return Ok(());
                                 }
                                 if c.is_ascii_hexdigit() {
-                                    goto_buffer.push(c);
+                                    buffer.push(c);
                                 }
                             },
                             KeyCode::Enter => {
-                                let Ok(goto_offset) = usize::from_str_radix(goto_buffer, 16) else {
-                                    continue;
-                                };
-                                
-                                if goto_offset >= state.bytes.len() {
-                                    continue;
-                                }
-                                
-                                state.scroll_pos = goto_offset / 0x10;
-                                state.selection = Some((goto_offset / 0x10, (goto_offset % 0x10) * 2));
-                                state.queued_input_state = Some(InputState::Regular);
+                                state.commit_input_state();
                             },
                             KeyCode::Esc => {
                                 state.queued_input_state = Some(InputState::Regular);
                             }
                             _ => {},
                         }
-                    }
-                    _ => todo!(),
+                    },
+                    InputState::FindString(buffer) => {
+                        match key_event.code {
+                            KeyCode::Backspace => {
+                                buffer.pop();
+                            },
+                            KeyCode::Char(c) => {
+                                if c == 'q' || c == 'Q' {
+                                    return Ok(());
+                                }
+                                
+                                buffer.push(c);
+                            },
+                            KeyCode::Enter => {
+                                state.commit_input_state();
+                            },
+                            KeyCode::Esc => {
+                                state.queued_input_state = Some(InputState::Regular);
+                            }
+                            _ => {},
+                        }
+                    },
+                    InputState::Find => {
+                        match key_event.code {
+                            KeyCode::Char('b') => {
+                                state.queued_input_state = Some(InputState::FindBytes(String::new()));
+                            },
+                            KeyCode::Char('t') => {
+                                state.queued_input_state = Some(InputState::FindString(String::new()));
+                            },
+                            _ => {},
+                        }
+                    },
                 }
             },
             Event::Mouse(mouse_event) => {
@@ -254,6 +295,9 @@ fn handle_key(event: KeyEvent, state: &mut State<'_>) -> bool {
         },
         KeyCode::Char('g') => {
             state.queued_input_state = Some(InputState::Goto(String::new()));
+        },
+        KeyCode::Char('f') => {
+            state.queued_input_state = Some(InputState::Find);
         },
         KeyCode::Char('s') | KeyCode::Char('S') => {
             // TODO: Save as
@@ -382,6 +426,33 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
             // TODO: figure out blinking cursor
             writer.write_char(LineColor::TextCursor, ' ');
         },
+        InputState::Find => {
+            writer.write_str(LineColor::RegularBold, "Find what?  B");
+            writer.write_str(LineColor::Regular, " bytes, ");
+            writer.write_str(LineColor::RegularBold, "T");
+            writer.write_str(LineColor::Regular, " text");
+        },
+        InputState::FindBytes(byte_buffer) => {
+            writer.write_str(LineColor::RegularBold, "Find byte sequence (in hex): ");
+            
+            let chunks = byte_buffer.chars().chunks(2);
+            for (i, chunk) in chunks.into_iter().enumerate() {
+                for c in chunk {
+                    writer.write_char(LineColor::Regular, c);
+                }
+                
+                if i * 2 + 1 < byte_buffer.len() {
+                    writer.write_whitespace(" ");
+                }
+            }
+            
+            writer.write_char(LineColor::TextCursor, ' ');
+        },
+        InputState::FindString(string_buffer) => {
+            writer.write_str(LineColor::RegularBold, "Find text: ");
+            writer.write_str(LineColor::Regular, string_buffer);
+            writer.write_char(LineColor::TextCursor, ' ');
+        },
         InputState::Regular => {
             if let Some(bottom_text) = state.bottom_text.as_deref() {
                 writer.write_str(LineColor::Regular, bottom_text);
@@ -392,6 +463,8 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
                 writer.write_str(LineColor::Regular, " pager, ");
                 writer.write_str(LineColor::RegularBold, "G");
                 writer.write_str(LineColor::Regular, " go to, ");
+                writer.write_str(LineColor::RegularBold, "F");
+                writer.write_str(LineColor::Regular, " find, ");
                 writer.write_str(save_color_bold, "^S");
                 writer.write_str(save_color, " save, ");
                 writer.write_str(LineColor::RegularBold, "HJKL/Arrows");
@@ -405,6 +478,8 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
                 writer.write_str(LineColor::Regular, " cursor, ");
                 writer.write_str(LineColor::RegularBold, "G");
                 writer.write_str(LineColor::Regular, " go to, ");
+                writer.write_str(LineColor::RegularBold, "F");
+                writer.write_str(LineColor::Regular, " find, ");
                 writer.write_str(save_color_bold, "^S");
                 writer.write_str(save_color, " save, ");
                 writer.write_str(LineColor::RegularBold, "J/Down");
@@ -413,7 +488,6 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
                 writer.write_str(LineColor::Regular, " scroll up ");
             }
         },
-        _ => todo!(),
     }
     
     writer.flush();
