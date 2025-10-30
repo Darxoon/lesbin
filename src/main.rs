@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, fs, io::{ErrorKind, stdout}, process::exit};
+use std::{collections::HashMap, env, fs, io::{ErrorKind, stdout}, mem, process::exit};
 
 use anyhow::{Error, Result};
 use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind}, execute};
@@ -63,12 +63,23 @@ fn main() -> Result<()> {
     result
 }
 
+#[derive(Debug)]
+enum InputState {
+    Regular,
+    Goto(String),
+    // Find,
+    // FindBytes(String),
+    // FindString(String),
+    // SaveAs,
+}
+
 struct State<'a> {
     scroll_pos: usize,
     max_rows: usize,
     
     selection: Option<(usize, usize)>,
-    goto_buffer: Option<String>,
+    input_state: InputState,
+    queued_input_state: Option<InputState>,
     
     area: Rect,
     
@@ -86,7 +97,8 @@ impl<'a> State<'a> {
             scroll_pos: 0,
             max_rows: bytes.len().div_ceil(16),
             selection: None,
-            goto_buffer: None,
+            input_state: InputState::Regular,
+            queued_input_state: None,
             area: Rect::default(),
             file_name,
             bytes,
@@ -116,52 +128,56 @@ fn run(mut terminal: DefaultTerminal, mut state: State<'_>) -> Result<()> {
                     return Ok(());
                 }
                 
-                // Go to menu
-                if state.goto_buffer.is_some() {
-                    match key_event.code {
-                        KeyCode::Backspace => {
-                            state.goto_buffer.as_mut().unwrap().pop();
-                        },
-                        KeyCode::Char(c) => {
-                            if c == 'q' || c == 'Q' {
-                                return Ok(());
-                            }
-                            if c.is_ascii_hexdigit() {
-                                state.goto_buffer.as_mut().unwrap().push(c);
-                            }
-                        },
-                        KeyCode::Enter => {
-                            let goto_buffer = state.goto_buffer.as_ref().unwrap();
-                            let Ok(goto_offset) = usize::from_str_radix(goto_buffer, 16) else {
-                                continue;
-                            };
-                            
-                            if goto_offset >= state.bytes.len() {
-                                continue;
-                            }
-                            
-                            state.scroll_pos = goto_offset / 0x10;
-                            state.selection = Some((goto_offset / 0x10, (goto_offset % 0x10) * 2));
-                            state.goto_buffer = None;
-                        },
-                        KeyCode::Esc => {
-                            state.goto_buffer = None;
+                match &mut state.input_state {
+                    InputState::Regular => {
+                        if !handle_key(key_event, &mut state) {
+                            // Quit if it returns false
+                            return Ok(());
                         }
-                        _ => {},
+                    },
+                    InputState::Goto(goto_buffer) => {
+                        match key_event.code {
+                            KeyCode::Backspace => {
+                                goto_buffer.pop();
+                            },
+                            KeyCode::Char(c) => {
+                                if c == 'q' || c == 'Q' {
+                                    return Ok(());
+                                }
+                                if c.is_ascii_hexdigit() {
+                                    goto_buffer.push(c);
+                                }
+                            },
+                            KeyCode::Enter => {
+                                let Ok(goto_offset) = usize::from_str_radix(goto_buffer, 16) else {
+                                    continue;
+                                };
+                                
+                                if goto_offset >= state.bytes.len() {
+                                    continue;
+                                }
+                                
+                                state.scroll_pos = goto_offset / 0x10;
+                                state.selection = Some((goto_offset / 0x10, (goto_offset % 0x10) * 2));
+                                state.queued_input_state = Some(InputState::Regular);
+                            },
+                            KeyCode::Esc => {
+                                state.queued_input_state = Some(InputState::Regular);
+                            }
+                            _ => {},
+                        }
                     }
-                    
-                    continue;
-                }
-                
-                if !handle_key(key_event, &mut state) {
-                    // Quit if it returns false
-                    return Ok(());
+                    _ => todo!(),
                 }
             },
             Event::Mouse(mouse_event) => {
                 handle_mouse(mouse_event, &mut state);
             },
             _ => {},
+        }
+        
+        if let Some(queued_input_state) = mem::take(&mut state.queued_input_state) {
+            state.input_state = queued_input_state;
         }
     }
 }
@@ -237,7 +253,7 @@ fn handle_key(event: KeyEvent, state: &mut State<'_>) -> bool {
             }
         },
         KeyCode::Char('g') => {
-            state.goto_buffer = Some(String::new());
+            state.queued_input_state = Some(InputState::Goto(String::new()));
         },
         KeyCode::Char('s') | KeyCode::Char('S') => {
             // TODO: Save as
@@ -293,9 +309,9 @@ fn handle_key(event: KeyEvent, state: &mut State<'_>) -> bool {
 }
 
 fn handle_mouse(event: MouseEvent, state: &mut State<'_>) {
-    if state.goto_buffer.is_some() {
+    let InputState::Regular = state.input_state else {
         return;
-    }
+    };
     
     match event.kind {
         MouseEventKind::Down(MouseButton::Left) => {
@@ -359,39 +375,45 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
         (LineColor::Regular, LineColor::RegularBold)
     };
     
-    if let Some(goto_buffer) = state.goto_buffer.as_deref() {
-        writer.write_str(LineColor::RegularBold, "Go to: 0x");
-        writer.write_str(LineColor::Regular, goto_buffer);
-        // TODO: figure out blinking cursor
-        writer.write_char(LineColor::TextCursor, ' ');
-    } else if let Some(bottom_text) = state.bottom_text.as_deref() {
-        writer.write_str(LineColor::Regular, bottom_text);
-    } else if state.selection.is_some() {
-        writer.write_str(LineColor::RegularBold, "Q");
-        writer.write_str(LineColor::Regular, " exit, ");
-        writer.write_str(LineColor::RegularBold, "C");
-        writer.write_str(LineColor::Regular, " pager, ");
-        writer.write_str(LineColor::RegularBold, "G");
-        writer.write_str(LineColor::Regular, " go to, ");
-        writer.write_str(save_color_bold, "^S");
-        writer.write_str(save_color, " save, ");
-        writer.write_str(LineColor::RegularBold, "HJKL/Arrows");
-        writer.write_str(LineColor::Regular, " move selection (");
-        writer.write_str(LineColor::RegularBold, "Alt");
-        writer.write_str(LineColor::Regular, " to move by digits) ");
-    } else {
-        writer.write_str(LineColor::RegularBold, "Q");
-        writer.write_str(LineColor::Regular, " exit, ");
-        writer.write_str(LineColor::RegularBold, "C");
-        writer.write_str(LineColor::Regular, " cursor, ");
-        writer.write_str(LineColor::RegularBold, "G");
-        writer.write_str(LineColor::Regular, " go to, ");
-        writer.write_str(save_color_bold, "^S");
-        writer.write_str(save_color, " save, ");
-        writer.write_str(LineColor::RegularBold, "J/Down");
-        writer.write_str(LineColor::Regular, " scroll down, ");
-        writer.write_str(LineColor::RegularBold, "K/Up");
-        writer.write_str(LineColor::Regular, " scroll up ");
+    match &state.input_state {
+        InputState::Goto(goto_buffer) => {
+            writer.write_str(LineColor::RegularBold, "Go to: 0x");
+            writer.write_str(LineColor::Regular, goto_buffer);
+            // TODO: figure out blinking cursor
+            writer.write_char(LineColor::TextCursor, ' ');
+        },
+        InputState::Regular => {
+            if let Some(bottom_text) = state.bottom_text.as_deref() {
+                writer.write_str(LineColor::Regular, bottom_text);
+            } else if state.selection.is_some() {
+                writer.write_str(LineColor::RegularBold, "Q");
+                writer.write_str(LineColor::Regular, " exit, ");
+                writer.write_str(LineColor::RegularBold, "C");
+                writer.write_str(LineColor::Regular, " pager, ");
+                writer.write_str(LineColor::RegularBold, "G");
+                writer.write_str(LineColor::Regular, " go to, ");
+                writer.write_str(save_color_bold, "^S");
+                writer.write_str(save_color, " save, ");
+                writer.write_str(LineColor::RegularBold, "HJKL/Arrows");
+                writer.write_str(LineColor::Regular, " move selection (");
+                writer.write_str(LineColor::RegularBold, "Alt");
+                writer.write_str(LineColor::Regular, " to move by digits) ");
+            } else {
+                writer.write_str(LineColor::RegularBold, "Q");
+                writer.write_str(LineColor::Regular, " exit, ");
+                writer.write_str(LineColor::RegularBold, "C");
+                writer.write_str(LineColor::Regular, " cursor, ");
+                writer.write_str(LineColor::RegularBold, "G");
+                writer.write_str(LineColor::Regular, " go to, ");
+                writer.write_str(save_color_bold, "^S");
+                writer.write_str(save_color, " save, ");
+                writer.write_str(LineColor::RegularBold, "J/Down");
+                writer.write_str(LineColor::Regular, " scroll down, ");
+                writer.write_str(LineColor::RegularBold, "K/Up");
+                writer.write_str(LineColor::Regular, " scroll up ");
+            }
+        },
+        _ => todo!(),
     }
     
     writer.flush();
