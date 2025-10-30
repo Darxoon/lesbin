@@ -14,8 +14,8 @@ Currently, editing is not yet supported, you can only view files.
 
 Here are some things i want to implement for this:
 
-* Actually editing and saving files
 * Find bytes or text in files
 * Configuration
 * Displaying integer values of byte sequences
 * Diffing of files
+* Improve performance/memory usage of large files
