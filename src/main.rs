@@ -3,7 +3,7 @@ use std::{collections::HashMap, env, fs, io::{ErrorKind, stdout}, mem, process::
 use anyhow::{Error, Result};
 use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind}, execute};
 use itertools::Itertools;
-use ratatui::{DefaultTerminal, Frame, layout::{Margin, Rect}, style::{Color, Style}, text::Span};
+use ratatui::{DefaultTerminal, Frame, layout::{Margin, Rect}, style::{Color, Style}, text::{Span, Text}};
 
 use crate::util::{LineColor, LineWriter};
 
@@ -411,6 +411,14 @@ fn draw(frame: &mut Frame, state: &mut State<'_>) -> Result<()> {
 }
 
 fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
+    let visible_bytes = usize::min(
+        (state.scroll_pos + state.visible_content_rows() - 1) * 0x10,
+        state.bytes.len() - 0x10,
+    );
+    let percentage = ((visible_bytes + 0x10) as f32 / state.bytes.len() as f32 * 100.0) as usize;
+    let percentage_string = format!("{:x} / {:x}, {}%", visible_bytes, state.bytes.len(), percentage);
+    frame.render_widget(Text::raw(&percentage_string).right_aligned(), row);
+    
     let mut writer = LineWriter::new(frame, row);
     
     let (save_color, save_color_bold) = if state.modified_bytes.is_empty() {
