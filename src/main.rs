@@ -3,6 +3,7 @@ use std::{collections::HashMap, env, fs, io::{ErrorKind, stdout}, mem, process::
 use anyhow::{Error, Result};
 use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind}, execute};
 use itertools::Itertools;
+use memchr::memmem;
 use ratatui::{DefaultTerminal, Frame, layout::{Margin, Rect}, style::{Color, Style}, text::{Span, Text}};
 
 use crate::util::{LineColor, LineWriter};
@@ -121,6 +122,28 @@ impl<'a> State<'a> {
                 
                 self.scroll_pos = goto_offset / 0x10;
                 self.selection = Some((goto_offset / 0x10, (goto_offset % 0x10) * 2));
+                self.queued_input_state = Some(InputState::Regular);
+            },
+            InputState::FindBytes(needle_string) => {
+                let Ok(needle) = hex::decode(needle_string) else {
+                    return;
+                };
+                
+                let Some(index) = memmem::find(&self.bytes, &needle) else {
+                    return;
+                };
+                
+                self.scroll_pos = index / 0x10;
+                self.selection = Some((index / 0x10, (index % 0x10) * 2));
+                self.queued_input_state = Some(InputState::Regular);
+            },
+            InputState::FindString(needle_string) => {
+                let Some(index) = memmem::find(&self.bytes, needle_string.as_bytes()) else {
+                    return;
+                };
+                
+                self.scroll_pos = index / 0x10;
+                self.selection = Some((index / 0x10, (index % 0x10) * 2));
                 self.queued_input_state = Some(InputState::Regular);
             },
             _ => panic!("State {:?} cannot be committed", self.input_state),
