@@ -204,8 +204,10 @@ impl<'a> State<'a> {
 }
 
 fn run(mut terminal: DefaultTerminal, config: &Config, mut state: State<'_>) -> Result<()> {
+    let keybinds = &config.keybinds;
+    
     loop {
-        terminal.draw(|frame| draw(frame, &mut state).unwrap())?;
+        terminal.draw(|frame| draw(frame, &config.keybinds, &mut state).unwrap())?;
         
         match event::read()? {
             Event::Key(key_event) => {
@@ -216,7 +218,7 @@ fn run(mut terminal: DefaultTerminal, config: &Config, mut state: State<'_>) -> 
                 
                 match &mut state.input_state {
                     InputState::Regular => {
-                        if !handle_key(key_event, &config.keybinds, &mut state) {
+                        if !handle_key(key_event, keybinds, &mut state) {
                             // Quit if it returns false
                             // TODO: ask if unsaved changes
                             return Ok(());
@@ -228,9 +230,6 @@ fn run(mut terminal: DefaultTerminal, config: &Config, mut state: State<'_>) -> 
                                 buffer.pop();
                             },
                             KeyCode::Char(c) => {
-                                if c == 'q' || c == 'Q' {
-                                    return Ok(());
-                                }
                                 if c.is_ascii_hexdigit() {
                                     buffer.push(c);
                                 }
@@ -243,6 +242,10 @@ fn run(mut terminal: DefaultTerminal, config: &Config, mut state: State<'_>) -> 
                             }
                             _ => {},
                         }
+                        
+                        if keybinds.quit.matches(key_event) {
+                            return Ok(())
+                        }
                     },
                     InputState::FindString(buffer) => {
                         match key_event.code {
@@ -250,10 +253,6 @@ fn run(mut terminal: DefaultTerminal, config: &Config, mut state: State<'_>) -> 
                                 buffer.pop();
                             },
                             KeyCode::Char(c) => {
-                                if c == 'q' || c == 'Q' {
-                                    return Ok(());
-                                }
-                                
                                 buffer.push(c);
                             },
                             KeyCode::Enter => {
@@ -264,19 +263,22 @@ fn run(mut terminal: DefaultTerminal, config: &Config, mut state: State<'_>) -> 
                             }
                             _ => {},
                         }
+                        
+                        if keybinds.quit.matches(key_event) {
+                            return Ok(())
+                        }
                     },
                     InputState::Find => {
-                        match key_event.code {
-                            KeyCode::Esc => {
-                                state.queued_input_state = Some(InputState::Regular);
-                            }
-                            KeyCode::Char('b') => {
-                                state.queued_input_state = Some(InputState::FindBytes(String::new()));
-                            },
-                            KeyCode::Char('t') => {
-                                state.queued_input_state = Some(InputState::FindString(String::new()));
-                            },
-                            _ => {},
+                        if key_event.code == KeyCode::Esc {
+                            state.queued_input_state = Some(InputState::Regular);
+                        }
+                        
+                        if keybinds.find_binary.matches(key_event) {
+                            state.queued_input_state = Some(InputState::FindBytes(String::new()));
+                        }
+                        
+                        if keybinds.find_text.matches(key_event) {
+                            state.queued_input_state = Some(InputState::FindString(String::new()));
                         }
                     },
                 }
@@ -501,11 +503,11 @@ const TITLE_STYLE: Style = Style::new()
     .fg(Color::Black)
     .bg(Color::Rgb(220, 220, 220));
 
-fn draw(frame: &mut Frame, state: &mut State<'_>) -> Result<()> {
+fn draw(frame: &mut Frame, keybinds: &Keybinds, state: &mut State<'_>) -> Result<()> {
     state.area = frame.area();
     
     frame.render_widget(Span::styled(state.file_name, TITLE_STYLE), frame.area());
-    draw_bottom(frame, state, frame.area().rows().last().unwrap())?;
+    draw_bottom(frame, keybinds, state, frame.area().rows().last().unwrap())?;
     
     let area = frame.area().inner(Margin::new(2, 2));
     
@@ -520,7 +522,7 @@ fn draw(frame: &mut Frame, state: &mut State<'_>) -> Result<()> {
     Ok(())
 }
 
-fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
+fn draw_bottom(frame: &mut Frame, keybinds: &Keybinds, state: &State<'_>, row: Rect) -> Result<()> {
     let visible_bytes = usize::min(
         (state.scroll_pos + state.visible_content_rows() - 1) * 0x10,
         state.bytes.len() - 0x10,
@@ -545,9 +547,9 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
             writer.write_char(LineColor::TextCursor, ' ');
         },
         InputState::Find => {
-            writer.write_str(LineColor::Emphasis, "Find what?  B");
+            writer.write(LineColor::Emphasis, format_args!("Find what?  {}", keybinds.find_binary))?;
             writer.write_str(LineColor::Regular, " bytes, ");
-            writer.write_str(LineColor::Emphasis, "T");
+            writer.write(LineColor::Emphasis, format_args!("{}", keybinds.find_text))?;
             writer.write_str(LineColor::Regular, " text");
         },
         InputState::FindBytes(byte_buffer) => {
@@ -575,34 +577,35 @@ fn draw_bottom(frame: &mut Frame, state: &State<'_>, row: Rect) -> Result<()> {
             if let Some(bottom_text) = state.bottom_text.as_deref() {
                 writer.write_str(LineColor::Regular, bottom_text);
             } else if state.selection.is_some() {
-                writer.write_str(LineColor::Emphasis, "Q");
+                writer.write(LineColor::Emphasis, format_args!("{}", keybinds.quit))?;
                 writer.write_str(LineColor::Regular, " exit, ");
-                writer.write_str(LineColor::Emphasis, "C");
+                writer.write(LineColor::Emphasis, format_args!("{}", keybinds.toggle_cursor))?;
                 writer.write_str(LineColor::Regular, " pager, ");
-                writer.write_str(LineColor::Emphasis, "G");
+                writer.write(LineColor::Emphasis, format_args!("{}", keybinds.go_to))?;
                 writer.write_str(LineColor::Regular, " go to, ");
-                writer.write_str(LineColor::Emphasis, "F");
+                writer.write(LineColor::Emphasis, format_args!("{}", keybinds.find))?;
                 writer.write_str(LineColor::Regular, " find, ");
-                writer.write_str(save_color_bold, "^S");
+                writer.write(save_color_bold, format_args!("{}", keybinds.save))?;
                 writer.write_str(save_color, " save, ");
-                writer.write_str(LineColor::Emphasis, "HJKL/Arrows");
+                writer.write(LineColor::Emphasis, format_args!("{}{}{}{}/Arrows",
+                    keybinds.left, keybinds.down, keybinds.up, keybinds.right))?;
                 writer.write_str(LineColor::Regular, " move selection (");
                 writer.write_str(LineColor::Emphasis, "Alt");
                 writer.write_str(LineColor::Regular, " to move by digits) ");
             } else {
-                writer.write_str(LineColor::Emphasis, "Q");
+                writer.write(LineColor::Emphasis, format_args!("{}", keybinds.quit))?;
                 writer.write_str(LineColor::Regular, " exit, ");
-                writer.write_str(LineColor::Emphasis, "C");
+                writer.write(LineColor::Emphasis, format_args!("{}", keybinds.toggle_cursor))?;
                 writer.write_str(LineColor::Regular, " cursor, ");
-                writer.write_str(LineColor::Emphasis, "G");
+                writer.write(LineColor::Emphasis, format_args!("{}", keybinds.go_to))?;
                 writer.write_str(LineColor::Regular, " go to, ");
-                writer.write_str(LineColor::Emphasis, "F");
+                writer.write(LineColor::Emphasis, format_args!("{}", keybinds.find))?;
                 writer.write_str(LineColor::Regular, " find, ");
-                writer.write_str(save_color_bold, "^S");
+                writer.write(save_color_bold, format_args!("{}", keybinds.save))?;
                 writer.write_str(save_color, " save, ");
-                writer.write_str(LineColor::Emphasis, "J/Down");
+                writer.write(LineColor::Emphasis, format_args!("{}/Down", keybinds.down))?;
                 writer.write_str(LineColor::Regular, " scroll down, ");
-                writer.write_str(LineColor::Emphasis, "K/Up");
+                writer.write(LineColor::Emphasis, format_args!("{}/Up", keybinds.up))?;
                 writer.write_str(LineColor::Regular, " scroll up ");
             }
         },
