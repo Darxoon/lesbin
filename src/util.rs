@@ -1,4 +1,4 @@
-use std::fmt::{Arguments, Write};
+use std::{fmt::{Arguments, Write}, marker::PhantomData};
 
 use anyhow::{Error, Result};
 use ratatui::{Frame, layout::Rect, style::{Color, Modifier, Style}, text::Span};
@@ -43,17 +43,21 @@ pub struct LineWriter<'a, 'b> {
     original_row: Rect,
     row: Rect,
     
-    frame: &'a mut Frame<'b>,
+    frame: *mut Frame<'b>,
+    _marker: PhantomData<&'a mut Frame<'b>>,
 }
 
 impl<'a, 'b> LineWriter<'a, 'b> {
-    pub fn new(frame: &'a mut Frame<'b>, row: Rect) -> Self {
+    /// SAFETY: `frame` must not be touched while this LineWriter is alive
+    /// by anyone except other LineWriters
+    pub unsafe fn new(frame: *mut Frame<'b>, row: Rect) -> Self {
         Self {
             buffer: String::new(),
             cur_color: LineColor::Regular,
             original_row: row,
             row,
             frame,
+            _marker: PhantomData,
         }
     }
     
@@ -99,7 +103,8 @@ impl<'a, 'b> LineWriter<'a, 'b> {
             return;
         }
         
-        self.frame.render_widget(Span::styled(&*self.buffer, self.cur_color.style()), self.row);
+        let frame = unsafe { &mut *self.frame};
+        frame.render_widget(Span::styled(&*self.buffer, self.cur_color.style()), self.row);
         self.row.x += self.buffer.len() as u16;
         self.row.width -= self.buffer.len() as u16;
         self.buffer.clear();
