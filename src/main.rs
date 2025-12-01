@@ -18,12 +18,12 @@ use itertools::Itertools;
 use memchr::memmem;
 use ratatui::{
     DefaultTerminal, Frame,
-    layout::{Margin, Rect},
+    layout::Rect,
     style::{Color, Style},
     text::{Span, Text},
 };
 
-use crate::{cfg::{Config, Keybinds}, util::{LineColor, LineWriter}};
+use crate::{cfg::{Appearance, Config, Keybinds}, util::{LineColor, LineWriter}};
 
 mod cfg;
 mod util;
@@ -199,6 +199,7 @@ impl<'a> State<'a> {
     }
     
     fn visible_content_rows(&self) -> usize {
+        // TODO: factor in user defined margin
         self.area.height as usize - 4
     }
 }
@@ -207,7 +208,7 @@ fn run(mut terminal: DefaultTerminal, config: &Config, mut state: State<'_>) -> 
     let keybinds = &config.keybinds;
     
     loop {
-        terminal.draw(|frame| draw(frame, &config.keybinds, &mut state).unwrap())?;
+        terminal.draw(|frame| draw(frame, config, &mut state).unwrap())?;
         
         match event::read()? {
             Event::Key(key_event) => {
@@ -503,19 +504,23 @@ const TITLE_STYLE: Style = Style::new()
     .fg(Color::Black)
     .bg(Color::Rgb(220, 220, 220));
 
-fn draw(frame: &mut Frame, keybinds: &Keybinds, state: &mut State<'_>) -> Result<()> {
+fn draw(frame: &mut Frame, config: &Config, state: &mut State<'_>) -> Result<()> {
     state.area = frame.area();
     
+    // Draw status ui
     frame.render_widget(Span::styled(state.file_name, TITLE_STYLE), frame.area());
     
     let mut rows = frame.area().rows().skip(frame.area().rows().try_len().unwrap() - 2);
-    draw_bottom(frame, keybinds, state, [rows.next().unwrap(), rows.next().unwrap()])?;
+    draw_bottom(frame, &config.keybinds, state, [rows.next().unwrap(), rows.next().unwrap()])?;
+    
+    // Draw main page
+    let Appearance { margin_horizontal, margin_vertical, .. } = config.appearance;
     
     let area = Rect::new(
-        frame.area().x + 2,
-        frame.area().y + 2,
-        frame.area().width - 4,
-        frame.area().height - 5,
+        frame.area().x + margin_horizontal,
+        frame.area().y + margin_vertical + 1,
+        frame.area().width - margin_horizontal * 2,
+        frame.area().height - margin_vertical * 2 - 3,
     );
     
     for (i, row) in area.rows().enumerate() {
@@ -598,7 +603,7 @@ fn draw_bottom(frame: &mut Frame, keybinds: &Keybinds, state: &State<'_>, rows: 
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.find))?;
                 line1.write_str(LineColor::Regular, " find, ");
                 line1.write(save_color_bold, format_args!("{}", keybinds.save))?;
-                line1.write_str(save_color, " save");
+                line1.write_str(save_color, " save,");
                 
                 line2.write(LineColor::Emphasis, format_args!("{}{}{}{}/Arrows",
                     keybinds.left, keybinds.down, keybinds.up, keybinds.right))?;
@@ -615,7 +620,7 @@ fn draw_bottom(frame: &mut Frame, keybinds: &Keybinds, state: &State<'_>, rows: 
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.find))?;
                 line1.write_str(LineColor::Regular, " find, ");
                 line1.write(save_color_bold, format_args!("{}", keybinds.save))?;
-                line1.write_str(save_color, " save");
+                line1.write_str(save_color, " save,");
                 
                 line2.write(LineColor::Emphasis, format_args!("{}/Down", keybinds.down))?;
                 line2.write_str(LineColor::Regular, " scroll down, ");

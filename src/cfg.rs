@@ -5,7 +5,14 @@ use serde::{Deserialize, de};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    pub appearance: Appearance,
     pub keybinds: Keybinds,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Appearance {
+    pub margin_horizontal: u16,
+    pub margin_vertical: u16,
 }
 
 #[derive(Debug, Deserialize)]

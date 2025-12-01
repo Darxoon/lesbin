@@ -2,6 +2,12 @@
 # start_with_cursor = false
 # quit_with_ctrl_c = true
 
+[appearance]
+# Controls the spacing between the status elements/terminal border
+# and the main display
+margin_horizontal = 2
+margin_vertical = 1
+
 [keybinds]
 # Basic functionality
 quit = "Q"
