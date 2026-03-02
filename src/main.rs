@@ -9,8 +9,7 @@ use std::{
 
 use anyhow::{Error, Result};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture},
-    execute, terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    event::{self, DisableMouseCapture}, execute, queue, terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode}
 };
 use memchr::memmem;
 
@@ -22,6 +21,8 @@ mod ui;
 mod util;
 
 const DEFAULT_CONFIG: &str = include_str!("res/default_config.toml");
+
+const ENABLE_MOUSE_CAPTURE: &[u8] = b"\x1B[?1000h";
 
 fn main() -> Result<()> {
     let mut config_file = OpenOptions::new()
@@ -79,7 +80,11 @@ fn main() -> Result<()> {
     // Add panic hook to disable mouse capture
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if let Err(err) = execute!(stdout(), DisableMouseCapture) {
+        if let Err(err) = execute!(stdout(), DisableMouseCapture, LeaveAlternateScreen) {
+            eprintln!("Error: {err:?}");
+        }
+        
+        if let Err(err) = disable_raw_mode() {
             eprintln!("Error: {err:?}");
         }
         
@@ -89,11 +94,16 @@ fn main() -> Result<()> {
     // Run TUI
     let state = State::new(&config, &input_file, input_bytes);
     
-    // TODO: panic hook
     enable_raw_mode()?;
-    execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    
+    let mut stdout = stdout();
+    queue!(stdout, EnterAlternateScreen)?;
+    // crossterm's builtin solution also enables mouse move events, which i don't need
+    stdout.write(ENABLE_MOUSE_CAPTURE)?;
+    stdout.flush()?;
+    
     let result = run(&config, state);
-    let result2 = execute!(stdout(), DisableMouseCapture, LeaveAlternateScreen);
+    let result2 = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
     disable_raw_mode()?;
     
     if let Err(err) = result2 {

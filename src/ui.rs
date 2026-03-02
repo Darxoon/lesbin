@@ -1,7 +1,7 @@
 use std::io::stdout;
 
 use anyhow::Result;
-use crossterm::{cursor::MoveTo, execute, style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor}, terminal};
+use crossterm::{cursor::{self, MoveTo}, execute, style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor}, terminal};
 use itertools::Itertools;
 
 use crate::{InputState, State, cfg::{Appearance, Config, Keybinds}, util::{LineColor, LineWriter}};
@@ -35,6 +35,30 @@ pub fn draw(config: &Config, state: &mut State<'_>) -> Result<()> {
         }
         
         draw_line(state, margin_horizontal, i + margin_vertical + PADDING_TOP, absolute_row_idx)?;
+    }
+    
+    // position text cursor
+    let mut text_cursor_shown = false;
+    
+    if let Some((row, col)) = state.selection && row >= state.scroll_pos {
+        let relative_y = (row - state.scroll_pos) as u16;
+        
+        if (relative_y as usize) < state.visible_content_rows() {
+            text_cursor_shown = true;
+            
+            let mut screen_x = (col / 2 * 3) + col % 2 + 0xe;
+            if col >= 16 {
+                screen_x += 1;
+            }
+            
+            let screen_y = relative_y + config.appearance.margin_vertical + PADDING_TOP;
+            
+            execute!(stdout(), cursor::Show, MoveTo(screen_x as u16, screen_y))?;
+        }
+    }
+    
+    if !text_cursor_shown {
+        execute!(stdout(), cursor::Hide)?;
     }
     
     Ok(())
@@ -167,11 +191,6 @@ fn draw_line(state: &State<'_>, x: u16, y: u16, row_idx: usize) -> Result<()> {
     
     let modified_bytes = state.modified_bytes.get(&row_idx).copied().unwrap_or_default();
     
-    let selected_col = match state.selection {
-        Some((row, col)) => (row_idx == row).then_some(col),
-        None => None,
-    };
-    
     let mut writer = LineWriter::new(x, y);
     
     // Write offset
@@ -202,19 +221,6 @@ fn draw_line(state: &State<'_>, x: u16, y: u16, row_idx: usize) -> Result<()> {
     
     // Write byte values
     let write_byte = |writer: &mut LineWriter, col: usize, x: u8| -> Result<()> {
-        if let Some(selected_col) = selected_col {
-            if selected_col / 2 == col && selected_col % 2 == 0 {
-                writer.write(LineColor::Highlighted, format_args!("{:01x}", x >> 4))?;
-                writer.write(color_of(col, x), format_args!("{:01x} ", x & 0xF))?;
-                return Ok(());
-            } else if selected_col / 2 == col && selected_col % 2 == 1 {
-                writer.write(color_of(col, x), format_args!("{:01x}", x >> 4))?;
-                writer.write(LineColor::Highlighted, format_args!("{:01x}", x & 0xF))?;
-                writer.write_char(LineColor::Regular, ' ')?;
-                return Ok(());
-            }
-        }
-        
         writer.write(color_of(col, x), format_args!("{:02x} ", x))?;
         Ok(())
     };
