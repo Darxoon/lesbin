@@ -6,12 +6,12 @@ use itertools::Itertools;
 
 use crate::{InputState, State, cfg::{Appearance, Config, Keybinds}, util::{LineColor, LineWriter}};
 
-const PADDING_TOP: u16 = 1;
-const PADDING_BOTTOM: u16 = 2;
+pub const PADDING_TOP: u16 = 1;
+pub const PADDING_BOTTOM: u16 = 2;
 
 pub fn draw(config: &Config, state: &mut State<'_>) -> Result<()> {
     let (width, height) = terminal::size()?;
-    state.screen_height = height as usize;
+    state.screen_height = height;
     
     // Draw status ui
     execute!(

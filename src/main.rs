@@ -14,7 +14,7 @@ use crossterm::{
 };
 use memchr::memmem;
 
-use crate::{cfg::Config, input::handle_input, ui::draw};
+use crate::{cfg::Config, input::handle_input, ui::{PADDING_BOTTOM, PADDING_TOP, draw}};
 
 mod cfg;
 mod input;
@@ -87,10 +87,12 @@ fn main() -> Result<()> {
     }));
     
     // Run TUI
+    let state = State::new(&config, &input_file, input_bytes);
+    
     // TODO: panic hook
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
-    let result = run(&config, State::new(&input_file, input_bytes));
+    let result = run(&config, state);
     let result2 = execute!(stdout(), DisableMouseCapture, LeaveAlternateScreen);
     disable_raw_mode()?;
     
@@ -119,7 +121,8 @@ struct State<'a> {
     input_state: InputState,
     queued_input_state: Option<InputState>,
     
-    screen_height: usize,
+    screen_height: u16,
+    total_vertical_padding: u16,
     
     file_name: &'a str,
     bytes: Vec<u8>,
@@ -130,7 +133,7 @@ struct State<'a> {
 }
 
 impl<'a> State<'a> {
-    fn new(file_name: &'a str, bytes: Vec<u8>) -> Self {
+    fn new(config: &Config, file_name: &'a str, bytes: Vec<u8>) -> Self {
         Self {
             scroll_pos: 0,
             max_rows: bytes.len().div_ceil(16),
@@ -138,6 +141,7 @@ impl<'a> State<'a> {
             input_state: InputState::Regular,
             queued_input_state: None,
             screen_height: 0,
+            total_vertical_padding: config.appearance.margin_vertical * 2 + PADDING_BOTTOM + PADDING_TOP,
             file_name,
             bytes,
             modified_bytes: HashMap::new(),
@@ -192,9 +196,7 @@ impl<'a> State<'a> {
     }
     
     fn visible_content_rows(&self) -> usize {
-        // TODO: factor in user defined margin
-        // self.area.height as usize - 5
-        8
+        self.screen_height as usize - self.total_vertical_padding as usize
     }
 }
 

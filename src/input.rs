@@ -200,7 +200,7 @@ fn handle_key_main(event: KeyEvent, keybinds: &Keybinds, state: &mut State<'_>) 
             if event.modifiers.contains(KeyModifiers::CONTROL) {
                 state.scroll_pos = usize::max(
                     state.scroll_pos,
-                    state.bytes.len() / 0x10 - (state.screen_height - 4) + 1,
+                    state.bytes.len() / 0x10 - (state.screen_height as usize - 4) + 1,
                 );
             }
             
