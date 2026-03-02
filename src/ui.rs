@@ -1,6 +1,9 @@
+use std::io::stdout;
+
 use anyhow::Result;
+use crossterm::{QueueableCommand, cursor::MoveTo, execute, queue, style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor}, terminal};
 use itertools::Itertools;
-use ratatui::{Frame, layout::Rect, style::{Color, Style}, text::{Span, Text}};
+use ratatui::{Frame, layout::Rect, style::{Color, Style}};
 
 use crate::{InputState, State, cfg::{Appearance, Config, Keybinds}, util::{LineColor, LineWriter}};
 
@@ -8,49 +11,54 @@ const TITLE_STYLE: Style = Style::new()
     .fg(Color::Black)
     .bg(Color::Rgb(220, 220, 220));
 
-pub fn draw(frame: &mut Frame, config: &Config, state: &mut State<'_>) -> Result<()> {
-    state.area = frame.area();
+pub fn draw(config: &Config, state: &mut State<'_>) -> Result<()> {
+    let area = terminal::size()?;
+    state.screen_height = area.1 as usize;
     
     // Draw status ui
-    frame.render_widget(Span::styled(state.file_name, TITLE_STYLE), frame.area());
+    execute!(
+        stdout(),
+        MoveTo(0, 0),
+        SetForegroundColor(crossterm::style::Color::Black),
+        SetBackgroundColor(crossterm::style::Color::Rgb { r: 220, g: 220, b: 220 }),
+        Print(state.file_name),
+        ResetColor,
+    )?;
     
-    let mut rows = frame.area().rows().skip(frame.area().rows().try_len().unwrap() - 2);
-    draw_bottom(frame, &config.keybinds, state, [rows.next().unwrap(), rows.next().unwrap()])?;
+    draw_bottom(&config.keybinds, state, area.1 - 2)?;
     
-    // Draw main page
-    let Appearance { margin_horizontal, margin_vertical, .. } = config.appearance;
+    // // Draw main page
+    // let Appearance { margin_horizontal, margin_vertical, .. } = config.appearance;
     
-    let area = Rect::new(
-        frame.area().x + margin_horizontal,
-        frame.area().y + margin_vertical + 1,
-        frame.area().width - margin_horizontal * 2,
-        frame.area().height - margin_vertical * 2 - 3,
-    );
+    // let area = Rect::new(
+    //     frame.area().x + margin_horizontal,
+    //     frame.area().y + margin_vertical + 1,
+    //     frame.area().width - margin_horizontal * 2,
+    //     frame.area().height - margin_vertical * 2 - 3,
+    // );
     
-    for (i, row) in area.rows().enumerate() {
-        if i + state.scroll_pos >= state.max_rows {
-            break;
-        }
+    // for (i, row) in area.rows().enumerate() {
+    //     if i + state.scroll_pos >= state.max_rows {
+    //         break;
+    //     }
         
-        draw_line(frame, state, row, i + state.scroll_pos)?;
-    }
+    //     draw_line(frame, state, row, i + state.scroll_pos)?;
+    // }
     
     Ok(())
 }
 
-fn draw_bottom(frame: &mut Frame, keybinds: &Keybinds, state: &State<'_>, rows: [Rect; 2]) -> Result<()> {
+fn draw_bottom(keybinds: &Keybinds, state: &State<'_>, start_y: u16) -> Result<()> {
     let visible_bytes = usize::min(
         (state.scroll_pos + state.visible_content_rows() - 1) * 0x10,
         state.bytes.len() - 0x10,
     );
     let percentage = ((visible_bytes + 0x10) as f32 / state.bytes.len() as f32 * 100.0) as usize;
     let percentage_string = format!("{:x} / {:x}, {}%", visible_bytes, state.bytes.len(), percentage);
-    frame.render_widget(Text::raw(&percentage_string).right_aligned(), rows[1]);
+    // frame.render_widget(Text::raw(&percentage_string).right_aligned(), start_y + 1);
     
-    // SAFETY: `frame` is not accessed anywhere else in this function from here on
-    // Being accessed from multiple LineWriters at the same time is allowed
-    let mut line1 = unsafe { LineWriter::new(frame, rows[0]) };
-    let mut line2 = unsafe { LineWriter::new(frame, rows[1]) };
+    let mut line1 = LineWriter::new(0, start_y);
+    let mut line2 = LineWriter::new(0, start_y + 1);
     
     let (save_color, save_color_bold) = if state.modified_bytes.is_empty() {
         (LineColor::Zero, LineColor::Zero)
@@ -159,7 +167,7 @@ fn draw_bottom(frame: &mut Frame, keybinds: &Keybinds, state: &State<'_>, rows: 
     Ok(())
 }
 
-fn draw_line(frame: &mut Frame, state: &State<'_>, row: Rect, row_idx: usize) -> Result<()> {
+fn draw_line(state: &State<'_>, row: Rect, row_idx: usize) -> Result<()> {
     let offset = row_idx * 0x10;
     
     let modified_bytes = state.modified_bytes.get(&row_idx).copied().unwrap_or_default();
@@ -169,8 +177,7 @@ fn draw_line(frame: &mut Frame, state: &State<'_>, row: Rect, row_idx: usize) ->
         None => None,
     };
     
-    // SAFETY: `frame` is not used anywhere else in this function
-    let mut writer = unsafe { LineWriter::new(frame, row) };
+    let mut writer = LineWriter::new(row.x, row.y);
     
     // Write offset
     writer.write(LineColor::Address, format_args!("{:04x} {:04x}", offset >> 16, offset & 0xFFFF))?;
@@ -199,7 +206,7 @@ fn draw_line(frame: &mut Frame, state: &State<'_>, row: Rect, row_idx: usize) ->
     };
     
     // Write byte values
-    let write_byte = |writer: &mut LineWriter<'_, '_>, col: usize, x: u8| -> Result<()> {
+    let write_byte = |writer: &mut LineWriter, col: usize, x: u8| -> Result<()> {
         if let Some(selected_col) = selected_col {
             if selected_col / 2 == col && selected_col % 2 == 0 {
                 writer.write(LineColor::Highlighted, format_args!("{:01x}", x >> 4))?;

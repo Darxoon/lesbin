@@ -1,7 +1,8 @@
-use std::{fmt::{Arguments, Write}, marker::PhantomData};
+use std::{fmt::{Arguments}, io::{Write, stdout}};
 
 use anyhow::{Error, Result};
-use ratatui::{Frame, layout::Rect, style::{Color, Modifier, Style}, text::Span};
+use crossterm::{QueueableCommand, cursor::MoveTo, queue, style::ResetColor};
+use ratatui::style::{Color, Modifier, Style};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineColor {
@@ -34,79 +35,83 @@ impl LineColor {
                 .fg(Color::DarkGray),
         }
     }
+    
+    fn encode(self, buffer: &mut Vec<u8>) -> Result<()> {
+        queue!(buffer, ResetColor).map_err(Into::into)
+    }
 }
 
-pub struct LineWriter<'a, 'b> {
-    buffer: String,
-    cur_color: LineColor,
+pub struct LineWriter {
+    buffer: Vec<u8>,
+    cur_color: Option<LineColor>,
     
-    original_row: Rect,
-    row: Rect,
-    
-    frame: *mut Frame<'b>,
-    _marker: PhantomData<&'a mut Frame<'b>>,
+    x: u16,
+    y: u16,
 }
 
-impl<'a, 'b> LineWriter<'a, 'b> {
-    /// SAFETY: `frame` must not be touched while this LineWriter is alive
-    /// by anyone except other LineWriters
-    pub unsafe fn new(frame: *mut Frame<'b>, row: Rect) -> Self {
+impl LineWriter {
+    pub fn new(x: u16, y: u16) -> Self {
         Self {
-            buffer: String::new(),
-            cur_color: LineColor::Regular,
-            original_row: row,
-            row,
-            frame,
-            _marker: PhantomData,
+            buffer: Vec::new(),
+            cur_color: None,
+            x,
+            y,
         }
     }
     
-    pub fn write_str(&mut self, color: LineColor, content: &str) {
-        if self.cur_color != color {
-            self.flush();
-            self.cur_color = color;
+    pub fn write_str(&mut self, color: LineColor, content: &str) -> Result<()> {
+        if self.cur_color.is_none_or(|cur_color| cur_color != color) {
+            color.encode(&mut self.buffer)?;
+            self.cur_color = Some(color);
         }
         
-        self.buffer.push_str(content);
+        self.buffer.extend_from_slice(content.as_bytes());
+        Ok(())
     }
     
-    pub fn write_char(&mut self, color: LineColor, content: char) {
-        if self.cur_color != color {
-            self.flush();
-            self.cur_color = color;
+    pub fn write_char(&mut self, color: LineColor, content: char) -> Result<()> {
+        if self.cur_color.is_none_or(|cur_color| cur_color != color) {
+            color.encode(&mut self.buffer)?;
+            self.cur_color = Some(color);
         }
         
-        self.buffer.push(content);
+        let mut buffer: [u8; 4] = [0; 4];
+        content.encode_utf8(&mut buffer);
+        self.buffer.extend_from_slice(&buffer[..content.len_utf8()]);
+        Ok(())
     }
     
     pub fn write(&mut self, color: LineColor, content: Arguments<'_>) -> Result<()> {
-        if self.cur_color != color {
-            self.flush();
-            self.cur_color = color;
+        if self.cur_color.is_none_or(|cur_color| cur_color != color) {
+            color.encode(&mut self.buffer)?;
+            self.cur_color = Some(color);
         }
         
-        self.buffer.write_fmt(content).map_err(Error::new)
+        self.buffer.write_fmt(content)?;
+        Ok(())
     }
     
     pub fn write_whitespace(&mut self, content: &str) {
-        self.buffer.push_str(content);
+        self.buffer.extend_from_slice(content.as_bytes());
     }
     
-    pub fn seek(&mut self, x_position: u16) {
-        self.flush();
-        self.row.x = x_position;
-        self.row.width = self.original_row.width - x_position;
+    pub fn seek(&mut self, x: u16) -> Result<()> {
+        self.flush()?;
+        self.x = x;
+        Ok(())
     }
     
-    pub fn flush(&mut self) {
+    pub fn flush(&mut self) -> Result<()> {
         if self.buffer.is_empty() {
-            return;
+            return Ok(());
         }
         
-        let frame = unsafe { &mut *self.frame};
-        frame.render_widget(Span::styled(&*self.buffer, self.cur_color.style()), self.row);
-        self.row.x += self.buffer.len() as u16;
-        self.row.width -= self.buffer.len() as u16;
+        let mut stdout = stdout();
+        stdout.queue(MoveTo(self.x, self.y))?;
+        stdout.write(&self.buffer)?;
+        stdout.flush()?;
+        
         self.buffer.clear();
+        Ok(())
     }
 }

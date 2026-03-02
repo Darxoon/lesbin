@@ -2,21 +2,19 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, Mous
 
 use crate::{InputState, State, cfg::Keybinds};
 
-pub fn handle_input(event: Event, keybinds: &Keybinds, state: &mut State) {
+pub fn handle_input(event: Event, keybinds: &Keybinds, state: &mut State) -> bool {
+    eprintln!("event {:?}", event);
+    
     match event {
         Event::Key(key_event) => {
             // special case for Ctrl C
             if let KeyCode::Char('c') = key_event.code && key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                return;
+                return false;
             }
             
             match &mut state.input_state {
                 InputState::Regular => {
-                    if !handle_key_main(key_event, keybinds, state) {
-                        // Quit if it returns false
-                        // TODO: ask if unsaved changes
-                        return;
-                    }
+                    return handle_key_main(key_event, keybinds, state);
                 },
                 InputState::Edit { prev_in_pager } => {
                     match key_event.code {
@@ -39,7 +37,7 @@ pub fn handle_input(event: Event, keybinds: &Keybinds, state: &mut State) {
                     
                     // Quit
                     if keybinds.quit.matches(key_event) {
-                        return;
+                        return false;
                     }
                     
                     // Save
@@ -69,7 +67,7 @@ pub fn handle_input(event: Event, keybinds: &Keybinds, state: &mut State) {
                     }
                     
                     if keybinds.quit.matches(key_event) {
-                        return;
+                        return false;
                     }
                 },
                 InputState::FindString(buffer) => {
@@ -90,7 +88,7 @@ pub fn handle_input(event: Event, keybinds: &Keybinds, state: &mut State) {
                     }
                     
                     if keybinds.quit.matches(key_event) {
-                        return;
+                        return false;
                     }
                 },
                 InputState::Find => {
@@ -113,6 +111,8 @@ pub fn handle_input(event: Event, keybinds: &Keybinds, state: &mut State) {
         },
         _ => {},
     }
+    
+    true
 }
 
 fn handle_edit_input(c: char, state: &mut State<'_>) {
@@ -202,7 +202,7 @@ fn handle_key_main(event: KeyEvent, keybinds: &Keybinds, state: &mut State<'_>) 
             if event.modifiers.contains(KeyModifiers::CONTROL) {
                 state.scroll_pos = usize::max(
                     state.scroll_pos,
-                    state.bytes.len() / 0x10 - (state.area.height as usize - 4) + 1,
+                    state.bytes.len() / 0x10 - (state.screen_height - 4) + 1,
                 );
             }
             

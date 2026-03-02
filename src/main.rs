@@ -10,10 +10,9 @@ use std::{
 use anyhow::{Error, Result};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture},
-    execute,
+    execute, terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use memchr::memmem;
-use ratatui::{DefaultTerminal, layout::Rect};
 
 use crate::{cfg::Config, input::handle_input, ui::draw};
 
@@ -41,7 +40,7 @@ fn main() -> Result<()> {
         toml::from_str(&content)?
     };
     
-    println!("{config:#?}");
+    eprintln!("{config:#?}");
     
     // let test_config = Config::default();
     // let test_config_string = toml::to_string_pretty(&test_config)?;
@@ -88,11 +87,13 @@ fn main() -> Result<()> {
     }));
     
     // Run TUI
-    let terminal = ratatui::init();
-    execute!(stdout(), EnableMouseCapture)?;
-    let result = run(terminal, &config, State::new(&input_file, input_bytes));
-    let result2 = execute!(stdout(), DisableMouseCapture);
-    ratatui::restore();
+    // TODO: panic hook
+    // let terminal = ratatui::init();
+    enable_raw_mode()?;
+    execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    let result = run(&config, State::new(&input_file, input_bytes));
+    let result2 = execute!(stdout(), DisableMouseCapture, LeaveAlternateScreen);
+    disable_raw_mode()?;
     
     if let Err(err) = result2 {
         eprintln!("Error: {err:?}");
@@ -119,7 +120,7 @@ struct State<'a> {
     input_state: InputState,
     queued_input_state: Option<InputState>,
     
-    area: Rect,
+    screen_height: usize,
     
     file_name: &'a str,
     bytes: Vec<u8>,
@@ -137,7 +138,7 @@ impl<'a> State<'a> {
             selection: None,
             input_state: InputState::Regular,
             queued_input_state: None,
-            area: Rect::default(),
+            screen_height: 0,
             file_name,
             bytes,
             modified_bytes: HashMap::new(),
@@ -193,17 +194,20 @@ impl<'a> State<'a> {
     
     fn visible_content_rows(&self) -> usize {
         // TODO: factor in user defined margin
-        self.area.height as usize - 5
+        // self.area.height as usize - 5
+        8
     }
 }
 
-fn run(mut terminal: DefaultTerminal, config: &Config, mut state: State<'_>) -> Result<()> {
+fn run(config: &Config, mut state: State<'_>) -> Result<()> {
     let keybinds = &config.keybinds;
     
     loop {
-        terminal.draw(|frame| draw(frame, config, &mut state).unwrap())?;
+        draw(config, &mut state)?;
         
-        handle_input(event::read()?, keybinds, &mut state);
+        if !handle_input(event::read()?, keybinds, &mut state) {
+            return Ok(());
+        }
         
         if let Some(queued_input_state) = mem::take(&mut state.queued_input_state) {
             state.input_state = queued_input_state;
