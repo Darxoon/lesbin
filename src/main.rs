@@ -111,6 +111,9 @@ fn main() -> Result<()> {
 #[derive(Debug)]
 enum InputState {
     Regular,
+    Edit {
+        prev_in_pager: bool,
+    },
     Goto(String),
     Find,
     FindBytes(String),
@@ -200,7 +203,7 @@ impl<'a> State<'a> {
     
     fn visible_content_rows(&self) -> usize {
         // TODO: factor in user defined margin
-        self.area.height as usize - 4
+        self.area.height as usize - 5
     }
 }
 
@@ -223,6 +226,37 @@ fn run(mut terminal: DefaultTerminal, config: &Config, mut state: State<'_>) -> 
                             // Quit if it returns false
                             // TODO: ask if unsaved changes
                             return Ok(());
+                        }
+                    },
+                    InputState::Edit { prev_in_pager } => {
+                        match key_event.code {
+                            KeyCode::Char(c) => {
+                                if c.is_ascii_hexdigit() {
+                                    handle_edit_input(c, &mut state);
+                                }
+                            },
+                            KeyCode::Esc => {
+                                state.queued_input_state = Some(InputState::Regular);
+                                
+                                if *prev_in_pager {
+                                    state.selection = None;
+                                }
+                            }
+                            _ => {},
+                        }
+                        
+                        handle_navigation(key_event, keybinds, &mut state);
+                        
+                        // Quit
+                        if keybinds.quit.matches(key_event) {
+                            return Ok(());
+                        }
+                        
+                        // Save
+                        if keybinds.save.matches(key_event) {
+                            if let Err(err) = state.save_file() {
+                                state.bottom_text = Some(format!("Error: {err}"));
+                            }
                         }
                     },
                     InputState::Goto(buffer) | InputState::FindBytes(buffer) => {
@@ -297,75 +331,23 @@ fn run(mut terminal: DefaultTerminal, config: &Config, mut state: State<'_>) -> 
 }
 
 fn handle_key(event: KeyEvent, keybinds: &Keybinds, state: &mut State<'_>) -> bool {
-    if event.code == KeyCode::Up || keybinds.up.matches(event) {
-        // Up
-        if let Some((row, _)) = &mut state.selection {
-            // Move cursor up if it's not at maximum height
-            *row = row.saturating_sub(1);
-            
-            // Scroll up if cursor goes out of bounds
-            if *row < state.scroll_pos {
-                state.scroll_pos = state.scroll_pos.saturating_sub(1);
-            }
-        } else {
-            // Scroll up if it's not at maximum height
-            state.scroll_pos = state.scroll_pos.saturating_sub(1);
-        }
-    }
-    if event.code == KeyCode::Down || keybinds.down.matches(event) {
-        // Down
-        if let Some((row, _)) = &mut state.selection {
-            // Move cursor down if it's not at maximum height
-            if *row < state.max_rows - 1 {
-                *row += 1;
-            }
-            
-            // Scroll down if cursor goes out of bounds
-            if *row >= state.scroll_pos + state.visible_content_rows() {
-                state.scroll_pos += 1;
-            }
-        } else {
-            // Scroll down if it's not at maximum height
-            if state.scroll_pos < state.max_rows {
-                state.scroll_pos += 1;
-            }
-        }
-    }
-    if event.code == KeyCode::Left || keybinds.left.matches(event) {
-        // Left
-        if let Some((_, col)) = &mut state.selection {
-            if !event.modifiers.contains(KeyModifiers::ALT) {
-                // Move cursor left in byte-increments (stop at left edge)
-                *col = col.saturating_sub(2);
-                *col = *col / 2 * 2;
-            } else {
-                // Move cursor left in digit-increments (stop at left edge)
-                *col = col.saturating_sub(1);
-            }
-        }
-    }
-    if event.code == KeyCode::Right || keybinds.right.matches(event) {
-        // Right
-        if let Some((_, col)) = &mut state.selection {
-            if !event.modifiers.contains(KeyModifiers::ALT) {
-                // Move cursor right in byte-increments (stop at right edge)
-                if *col < 0x1e {
-                    *col += 2;
-                    *col = *col / 2 * 2;
-                }
-            } else {
-                // Move cursor right in digit-increments (stop at right edge)
-                if *col < 0x1f {
-                    *col += 1;
-                }
-            }
-        }
-    }
+    handle_navigation(event, keybinds, state);
+    
     if keybinds.toggle_cursor.matches(event) {
         // Toggle pager and selection mode
         if state.selection.is_some() {
             state.selection = None;
         } else {
+            state.selection = Some((state.scroll_pos, 0));
+        }
+    }
+    if keybinds.edit.matches(event) {
+        // Enable edit mode
+        state.queued_input_state = Some(InputState::Edit {
+            prev_in_pager: state.selection.is_none(),
+        });
+        
+        if state.selection.is_none() {
             state.selection = Some((state.scroll_pos, 0));
         }
     }
@@ -432,32 +414,6 @@ fn handle_key(event: KeyEvent, keybinds: &Keybinds, state: &mut State<'_>) -> bo
                 // Quit if in pager mode
                 return false;
             }
-        }
-        KeyCode::Char(c) => {
-            if let Some((row, col)) = &mut state.selection
-            && let Some(digit) = c.to_digit(10) {
-                let offset = *col / 2 + *row * 0x10;
-                let prev_byte = state.bytes[offset];
-                
-                let new_byte = if *col % 2 == 0 {
-                    // Modify upper half of byte
-                    (prev_byte & 0xF) | ((digit as u8) << 4)
-                } else {
-                    // Modify lower half of byte
-                    (prev_byte & 0xF0) | (digit as u8)
-                };
-                
-                if prev_byte != new_byte {
-                    state.bytes[offset] = new_byte;
-                    state.modified_bytes.entry(*row).or_default()[*col / 2] = true;
-                }
-                
-                *col += 1;
-                if *col >= 0x20 {
-                    *col = 0;
-                    *row += 1;
-                }
-            }
         },
         _ => {},
     }
@@ -465,10 +421,105 @@ fn handle_key(event: KeyEvent, keybinds: &Keybinds, state: &mut State<'_>) -> bo
     true
 }
 
+fn handle_navigation(event: KeyEvent, keybinds: &Keybinds, state: &mut State<'_>) {
+    if event.code == KeyCode::Up || keybinds.up.matches(event) {
+        // Up
+        if let Some((row, _)) = &mut state.selection {
+            // Move cursor up if it's not at maximum height
+            *row = row.saturating_sub(1);
+            
+            // Scroll up if cursor goes out of bounds
+            if *row < state.scroll_pos {
+                state.scroll_pos = state.scroll_pos.saturating_sub(1);
+            }
+        } else {
+            // Scroll up if it's not at maximum height
+            state.scroll_pos = state.scroll_pos.saturating_sub(1);
+        }
+    }
+    if event.code == KeyCode::Down || keybinds.down.matches(event) {
+        // Down
+        if let Some((row, _)) = &mut state.selection {
+            // Move cursor down if it's not at maximum height
+            if *row < state.max_rows - 1 {
+                *row += 1;
+            }
+            
+            // Scroll down if cursor goes out of bounds
+            if *row >= state.scroll_pos + state.visible_content_rows() {
+                state.scroll_pos += 1;
+            }
+        } else {
+            // Scroll down if it's not at maximum height
+            if state.scroll_pos < state.max_rows {
+                state.scroll_pos += 1;
+            }
+        }
+    }
+    if event.code == KeyCode::Left || keybinds.left.matches(event) {
+        // Left
+        if let Some((_, col)) = &mut state.selection {
+            if !event.modifiers.contains(KeyModifiers::ALT) {
+                // Move cursor left in byte-increments (stop at left edge)
+                *col = col.saturating_sub(2);
+                *col = *col / 2 * 2;
+            } else {
+                // Move cursor left in digit-increments (stop at left edge)
+                *col = col.saturating_sub(1);
+            }
+        }
+    }
+    if event.code == KeyCode::Right || keybinds.right.matches(event) {
+        // Right
+        if let Some((_, col)) = &mut state.selection {
+            if !event.modifiers.contains(KeyModifiers::ALT) {
+                // Move cursor right in byte-increments (stop at right edge)
+                if *col < 0x1e {
+                    *col += 2;
+                    *col = *col / 2 * 2;
+                }
+            } else {
+                // Move cursor right in digit-increments (stop at right edge)
+                if *col < 0x1f {
+                    *col += 1;
+                }
+            }
+        }
+    }
+}
+
+fn handle_edit_input(c: char, state: &mut State<'_>) {
+    if let Some((row, col)) = &mut state.selection
+    && let Some(digit) = c.to_digit(16) {
+        let offset = *col / 2 + *row * 0x10;
+        let prev_byte = state.bytes[offset];
+        
+        let new_byte = if *col % 2 == 0 {
+            // Modify upper half of byte
+            (prev_byte & 0xF) | ((digit as u8) << 4)
+        } else {
+            // Modify lower half of byte
+            (prev_byte & 0xF0) | (digit as u8)
+        };
+        
+        if prev_byte != new_byte {
+            state.bytes[offset] = new_byte;
+            state.modified_bytes.entry(*row).or_default()[*col / 2] = true;
+        }
+        
+        *col += 1;
+        if *col >= 0x20 {
+            *col = 0;
+            *row += 1;
+        }
+    }
+}
+
 fn handle_mouse(event: MouseEvent, state: &mut State<'_>) {
-    let InputState::Regular = state.input_state else {
-        return;
-    };
+    match state.input_state {
+        InputState::Regular | InputState::Edit { .. } => {},
+        _ => return,
+    }
     
     match event.kind {
         MouseEventKind::Down(MouseButton::Left) => {
@@ -590,6 +641,22 @@ fn draw_bottom(frame: &mut Frame, keybinds: &Keybinds, state: &State<'_>, rows: 
             line2.write_str(LineColor::Regular, string_buffer);
             line2.write_char(LineColor::TextCursor, ' ');
         },
+        InputState::Edit { .. } => {
+            line1.write(LineColor::Emphasis, format_args!("{}", keybinds.quit))?;
+            line1.write_str(LineColor::Regular, " exit, ");
+            line1.write_str(LineColor::Emphasis, "Esc");
+            line1.write_str(LineColor::Regular, " go back, ");
+            line1.write_str(LineColor::Emphasis, "0-9 A-F");
+            line1.write_str(LineColor::Regular, " overwrite bytes, ");
+                line1.write(save_color_bold, format_args!("{}", keybinds.save))?;
+                line1.write_str(save_color, " save");
+            
+            line2.write(LineColor::Emphasis, format_args!("{}{}{}{}/Arrows",
+                keybinds.left, keybinds.down, keybinds.up, keybinds.right))?;
+            line2.write_str(LineColor::Regular, " move selection (");
+            line2.write_str(LineColor::Emphasis, "Alt");
+            line2.write_str(LineColor::Regular, " to move by digits) ");
+        },
         InputState::Regular => {
             if let Some(bottom_text) = state.bottom_text.as_deref() {
                 line2.write_str(LineColor::Regular, bottom_text);
@@ -598,12 +665,14 @@ fn draw_bottom(frame: &mut Frame, keybinds: &Keybinds, state: &State<'_>, rows: 
                 line1.write_str(LineColor::Regular, " exit, ");
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.toggle_cursor))?;
                 line1.write_str(LineColor::Regular, " pager,  ");
+                line1.write(LineColor::Emphasis, format_args!("{}", keybinds.edit))?;
+                line1.write_str(LineColor::Regular, " edit, ");
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.go_to))?;
                 line1.write_str(LineColor::Regular, " go to, ");
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.find))?;
                 line1.write_str(LineColor::Regular, " find, ");
                 line1.write(save_color_bold, format_args!("{}", keybinds.save))?;
-                line1.write_str(save_color, " save,");
+                line1.write_str(save_color, " save");
                 
                 line2.write(LineColor::Emphasis, format_args!("{}{}{}{}/Arrows",
                     keybinds.left, keybinds.down, keybinds.up, keybinds.right))?;
@@ -615,12 +684,14 @@ fn draw_bottom(frame: &mut Frame, keybinds: &Keybinds, state: &State<'_>, rows: 
                 line1.write_str(LineColor::Regular, " exit, ");
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.toggle_cursor))?;
                 line1.write_str(LineColor::Regular, " cursor, ");
+                line1.write(LineColor::Emphasis, format_args!("{}", keybinds.edit))?;
+                line1.write_str(LineColor::Regular, " edit, ");
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.go_to))?;
                 line1.write_str(LineColor::Regular, " go to, ");
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.find))?;
                 line1.write_str(LineColor::Regular, " find, ");
                 line1.write(save_color_bold, format_args!("{}", keybinds.save))?;
-                line1.write_str(save_color, " save,");
+                line1.write_str(save_color, " save");
                 
                 line2.write(LineColor::Emphasis, format_args!("{}/Down", keybinds.down))?;
                 line2.write_str(LineColor::Regular, " scroll down, ");

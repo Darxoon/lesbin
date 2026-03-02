@@ -22,6 +22,9 @@ right = "L"
 # Toggles between cursor mode and pager mode
 toggle_cursor = "C"
 
+# Enables editing bytes
+edit = "E"
+
 # Utilities
 go_to = "G"
 find = "F"

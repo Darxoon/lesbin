@@ -24,6 +24,7 @@ pub struct Keybinds {
     pub up: Keybind,
     pub right: Keybind,
     pub toggle_cursor: Keybind,
+    pub edit: Keybind,
     pub go_to: Keybind,
     pub find: Keybind,
     pub find_binary: Keybind,

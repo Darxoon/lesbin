@@ -8,15 +8,13 @@ Run `lesbin <path to binary file>` (or `cargo run -- <path to binary file>`) to 
 
 All keyboard shortcuts are displayed on screen.
 
-Currently, editing is not yet supported, you can only view files.
-
 ## Roadmap
 
 Here are some things i want to implement for this:
 
 * Selecting bytes or text (+ clipboard integration)
 * Inserting bytes
-* Configuration
+* More configuration options
 * Displaying integer values of byte sequences
 * Diffing of files
 * Improve performance/memory usage of large files
