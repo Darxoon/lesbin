@@ -88,7 +88,6 @@ fn main() -> Result<()> {
     
     // Run TUI
     // TODO: panic hook
-    // let terminal = ratatui::init();
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     let result = run(&config, State::new(&input_file, input_bytes));

@@ -1,8 +1,7 @@
 use std::{fmt::{Arguments}, io::{Write, stdout}};
 
-use anyhow::{Error, Result};
-use crossterm::{QueueableCommand, cursor::MoveTo, queue, style::ResetColor};
-use ratatui::style::{Color, Modifier, Style};
+use anyhow::Result;
+use crossterm::{QueueableCommand, cursor::MoveTo, queue, style::{Attribute, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineColor {
@@ -16,28 +15,42 @@ pub enum LineColor {
 }
 
 impl LineColor {
-    const fn style(self) -> Style {
-        match self {
-            LineColor::Regular => Style::new(),
-            LineColor::Emphasis => Style::new()
-                .fg(Color::Indexed(39))
-                .add_modifier(Modifier::BOLD),
-            LineColor::Highlighted => Style::new()
-                .fg(Color::Black)
-                .bg(Color::Gray),
-            LineColor::TextCursor => Style::new()
-                .add_modifier(Modifier::REVERSED),
-            LineColor::Modified => Style::new()
-                .fg(Color::Indexed(215)),
-            LineColor::Address => Style::new()
-                .fg(Color::Indexed(206)),
-            LineColor::Zero => Style::new()
-                .fg(Color::DarkGray),
-        }
-    }
-    
     fn encode(self, buffer: &mut Vec<u8>) -> Result<()> {
-        queue!(buffer, ResetColor).map_err(Into::into)
+        match self {
+            LineColor::Regular => queue!(buffer, ResetColor),
+            LineColor::Emphasis => queue!(
+                buffer,
+                ResetColor,
+                SetForegroundColor(crossterm::style::Color::AnsiValue(39)),
+                SetAttribute(Attribute::Bold),
+            ),
+            LineColor::Highlighted => queue!(
+                buffer,
+                ResetColor,
+                SetForegroundColor(crossterm::style::Color::Black),
+                SetBackgroundColor(crossterm::style::Color::Grey),
+            ),
+            LineColor::TextCursor => queue!(
+                buffer,
+                ResetColor,
+                SetAttribute(Attribute::Reverse),
+            ),
+            LineColor::Modified => queue!(
+                buffer,
+                ResetColor,
+                SetForegroundColor(crossterm::style::Color::AnsiValue(215)),
+            ),
+            LineColor::Address => queue!(
+                buffer,
+                ResetColor,
+                SetForegroundColor(crossterm::style::Color::AnsiValue(206)),
+            ),
+            LineColor::Zero => queue!(
+                buffer,
+                ResetColor,
+                SetForegroundColor(crossterm::style::Color::DarkGrey),
+            ),
+        }.map_err(Into::into)
     }
 }
 
@@ -111,6 +124,7 @@ impl LineWriter {
         stdout.write(&self.buffer)?;
         stdout.flush()?;
         
+        self.cur_color = None;
         self.buffer.clear();
         Ok(())
     }

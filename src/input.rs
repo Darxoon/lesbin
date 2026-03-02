@@ -3,8 +3,6 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, Mous
 use crate::{InputState, State, cfg::Keybinds};
 
 pub fn handle_input(event: Event, keybinds: &Keybinds, state: &mut State) -> bool {
-    eprintln!("event {:?}", event);
-    
     match event {
         Event::Key(key_event) => {
             // special case for Ctrl C

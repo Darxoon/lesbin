@@ -1,19 +1,17 @@
 use std::io::stdout;
 
 use anyhow::Result;
-use crossterm::{QueueableCommand, cursor::MoveTo, execute, queue, style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor}, terminal};
+use crossterm::{cursor::MoveTo, execute, style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor}, terminal};
 use itertools::Itertools;
-use ratatui::{Frame, layout::Rect, style::{Color, Style}};
 
 use crate::{InputState, State, cfg::{Appearance, Config, Keybinds}, util::{LineColor, LineWriter}};
 
-const TITLE_STYLE: Style = Style::new()
-    .fg(Color::Black)
-    .bg(Color::Rgb(220, 220, 220));
+const PADDING_TOP: u16 = 1;
+const PADDING_BOTTOM: u16 = 2;
 
 pub fn draw(config: &Config, state: &mut State<'_>) -> Result<()> {
-    let area = terminal::size()?;
-    state.screen_height = area.1 as usize;
+    let (width, height) = terminal::size()?;
+    state.screen_height = height as usize;
     
     // Draw status ui
     execute!(
@@ -25,38 +23,24 @@ pub fn draw(config: &Config, state: &mut State<'_>) -> Result<()> {
         ResetColor,
     )?;
     
-    draw_bottom(&config.keybinds, state, area.1 - 2)?;
+    draw_bottom(&config.keybinds, state, width, height - 2)?;
     
-    // // Draw main page
-    // let Appearance { margin_horizontal, margin_vertical, .. } = config.appearance;
+    // Draw main page
+    let Appearance { margin_horizontal, margin_vertical, .. } = config.appearance;
     
-    // let area = Rect::new(
-    //     frame.area().x + margin_horizontal,
-    //     frame.area().y + margin_vertical + 1,
-    //     frame.area().width - margin_horizontal * 2,
-    //     frame.area().height - margin_vertical * 2 - 3,
-    // );
-    
-    // for (i, row) in area.rows().enumerate() {
-    //     if i + state.scroll_pos >= state.max_rows {
-    //         break;
-    //     }
+    for i in 0..height - (margin_vertical * 2 + PADDING_TOP + PADDING_BOTTOM) {
+        let absolute_row_idx = i as usize + state.scroll_pos;
+        if absolute_row_idx >= state.max_rows {
+            break;
+        }
         
-    //     draw_line(frame, state, row, i + state.scroll_pos)?;
-    // }
+        draw_line(state, margin_horizontal, i + margin_vertical + PADDING_TOP, absolute_row_idx)?;
+    }
     
     Ok(())
 }
 
-fn draw_bottom(keybinds: &Keybinds, state: &State<'_>, start_y: u16) -> Result<()> {
-    let visible_bytes = usize::min(
-        (state.scroll_pos + state.visible_content_rows() - 1) * 0x10,
-        state.bytes.len() - 0x10,
-    );
-    let percentage = ((visible_bytes + 0x10) as f32 / state.bytes.len() as f32 * 100.0) as usize;
-    let percentage_string = format!("{:x} / {:x}, {}%", visible_bytes, state.bytes.len(), percentage);
-    // frame.render_widget(Text::raw(&percentage_string).right_aligned(), start_y + 1);
-    
+fn draw_bottom(keybinds: &Keybinds, state: &State<'_>, width: u16, start_y: u16) -> Result<()> {
     let mut line1 = LineWriter::new(0, start_y);
     let mut line2 = LineWriter::new(0, start_y + 1);
     
@@ -68,26 +52,26 @@ fn draw_bottom(keybinds: &Keybinds, state: &State<'_>, start_y: u16) -> Result<(
     
     match &state.input_state {
         InputState::Goto(goto_buffer) => {
-            line2.write_str(LineColor::Emphasis, "Go to: 0x");
-            line2.write_str(LineColor::Regular, goto_buffer);
+            line2.write_str(LineColor::Emphasis, "Go to: 0x")?;
+            line2.write_str(LineColor::Regular, goto_buffer)?;
             // TODO: figure out blinking cursor
-            line2.write_char(LineColor::TextCursor, ' ');
+            line2.write_char(LineColor::TextCursor, ' ')?;
         },
         InputState::Find => {
             line2.write(LineColor::Emphasis, format_args!("Find what?  {}", keybinds.find_binary))?;
-            line2.write_str(LineColor::Regular, " bytes, ");
+            line2.write_str(LineColor::Regular, " bytes, ")?;
             line2.write(LineColor::Emphasis, format_args!("{}", keybinds.find_text))?;
-            line2.write_str(LineColor::Regular, " text, (");
-            line2.write_str(LineColor::Emphasis, "Esc");
-            line2.write_str(LineColor::Regular, " back)");
+            line2.write_str(LineColor::Regular, " text, (")?;
+            line2.write_str(LineColor::Emphasis, "Esc")?;
+            line2.write_str(LineColor::Regular, " back)")?;
         },
         InputState::FindBytes(byte_buffer) => {
-            line2.write_str(LineColor::Emphasis, "Find byte sequence (in hex): ");
+            line2.write_str(LineColor::Emphasis, "Find byte sequence (in hex): ")?;
             
             let chunks = byte_buffer.chars().chunks(2);
             for (i, chunk) in chunks.into_iter().enumerate() {
                 for c in chunk {
-                    line2.write_char(LineColor::Regular, c);
+                    line2.write_char(LineColor::Regular, c)?;
                 }
                 
                 if i * 2 + 1 < byte_buffer.len() {
@@ -95,79 +79,90 @@ fn draw_bottom(keybinds: &Keybinds, state: &State<'_>, start_y: u16) -> Result<(
                 }
             }
             
-            line2.write_char(LineColor::TextCursor, ' ');
+            line2.write_char(LineColor::TextCursor, ' ')?;
         },
         InputState::FindString(string_buffer) => {
-            line2.write_str(LineColor::Emphasis, "Find text: ");
-            line2.write_str(LineColor::Regular, string_buffer);
-            line2.write_char(LineColor::TextCursor, ' ');
+            line2.write_str(LineColor::Emphasis, "Find text: ")?;
+            line2.write_str(LineColor::Regular, string_buffer)?;
+            line2.write_char(LineColor::TextCursor, ' ')?;
         },
         InputState::Edit { .. } => {
             line1.write(LineColor::Emphasis, format_args!("{}", keybinds.quit))?;
-            line1.write_str(LineColor::Regular, " exit, ");
-            line1.write_str(LineColor::Emphasis, "Esc");
-            line1.write_str(LineColor::Regular, " go back, ");
-            line1.write_str(LineColor::Emphasis, "0-9 A-F");
-            line1.write_str(LineColor::Regular, " overwrite bytes, ");
+            line1.write_str(LineColor::Regular, " exit, ")?;
+            line1.write_str(LineColor::Emphasis, "Esc")?;
+            line1.write_str(LineColor::Regular, " go back, ")?;
+            line1.write_str(LineColor::Emphasis, "0-9 A-F")?;
+            line1.write_str(LineColor::Regular, " overwrite bytes, ")?;
                 line1.write(save_color_bold, format_args!("{}", keybinds.save))?;
-                line1.write_str(save_color, " save");
+                line1.write_str(save_color, " save")?;
             
             line2.write(LineColor::Emphasis, format_args!("{}{}{}{}/Arrows",
                 keybinds.left, keybinds.down, keybinds.up, keybinds.right))?;
-            line2.write_str(LineColor::Regular, " move selection (");
-            line2.write_str(LineColor::Emphasis, "Alt");
-            line2.write_str(LineColor::Regular, " to move by digits) ");
+            line2.write_str(LineColor::Regular, " move selection (")?;
+            line2.write_str(LineColor::Emphasis, "Alt")?;
+            line2.write_str(LineColor::Regular, " to move by digits) ")?;
         },
         InputState::Regular => {
             if let Some(bottom_text) = state.bottom_text.as_deref() {
-                line2.write_str(LineColor::Regular, bottom_text);
+                line2.write_str(LineColor::Regular, bottom_text)?;
             } else if state.selection.is_some() {
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.quit))?;
-                line1.write_str(LineColor::Regular, " exit, ");
+                line1.write_str(LineColor::Regular, " exit, ")?;
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.toggle_cursor))?;
-                line1.write_str(LineColor::Regular, " pager,  ");
+                line1.write_str(LineColor::Regular, " pager,  ")?;
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.edit))?;
-                line1.write_str(LineColor::Regular, " edit, ");
+                line1.write_str(LineColor::Regular, " edit, ")?;
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.go_to))?;
-                line1.write_str(LineColor::Regular, " go to, ");
+                line1.write_str(LineColor::Regular, " go to, ")?;
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.find))?;
-                line1.write_str(LineColor::Regular, " find, ");
+                line1.write_str(LineColor::Regular, " find, ")?;
                 line1.write(save_color_bold, format_args!("{}", keybinds.save))?;
-                line1.write_str(save_color, " save");
+                line1.write_str(save_color, " save")?;
                 
                 line2.write(LineColor::Emphasis, format_args!("{}{}{}{}/Arrows",
                     keybinds.left, keybinds.down, keybinds.up, keybinds.right))?;
-                line2.write_str(LineColor::Regular, " move selection (");
-                line2.write_str(LineColor::Emphasis, "Alt");
-                line2.write_str(LineColor::Regular, " to move by digits) ");
+                line2.write_str(LineColor::Regular, " move selection (")?;
+                line2.write_str(LineColor::Emphasis, "Alt")?;
+                line2.write_str(LineColor::Regular, " to move by digits) ")?;
             } else {
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.quit))?;
-                line1.write_str(LineColor::Regular, " exit, ");
+                line1.write_str(LineColor::Regular, " exit, ")?;
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.toggle_cursor))?;
-                line1.write_str(LineColor::Regular, " cursor, ");
+                line1.write_str(LineColor::Regular, " cursor, ")?;
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.edit))?;
-                line1.write_str(LineColor::Regular, " edit, ");
+                line1.write_str(LineColor::Regular, " edit, ")?;
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.go_to))?;
-                line1.write_str(LineColor::Regular, " go to, ");
+                line1.write_str(LineColor::Regular, " go to, ")?;
                 line1.write(LineColor::Emphasis, format_args!("{}", keybinds.find))?;
-                line1.write_str(LineColor::Regular, " find, ");
+                line1.write_str(LineColor::Regular, " find, ")?;
                 line1.write(save_color_bold, format_args!("{}", keybinds.save))?;
-                line1.write_str(save_color, " save");
+                line1.write_str(save_color, " save")?;
                 
                 line2.write(LineColor::Emphasis, format_args!("{}/Down", keybinds.down))?;
-                line2.write_str(LineColor::Regular, " scroll down, ");
+                line2.write_str(LineColor::Regular, " scroll down, ")?;
                 line2.write(LineColor::Emphasis, format_args!("{}/Up", keybinds.up))?;
-                line2.write_str(LineColor::Regular, " scroll up ");
+                line2.write_str(LineColor::Regular, " scroll up ")?;
             }
         },
     }
     
-    line1.flush();
-    line2.flush();
+    // display percentage
+    let visible_bytes = usize::min(
+        (state.scroll_pos + state.visible_content_rows() - 1) * 0x10,
+        state.bytes.len() - 0x10,
+    );
+    let percentage = ((visible_bytes + 0x10) as f32 / state.bytes.len() as f32 * 100.0) as usize;
+    let percentage_string = format!("{:x} / {:x}, {}%", visible_bytes, state.bytes.len(), percentage);
+    
+    line2.seek(width - percentage_string.len() as u16)?;
+    line2.write_str(LineColor::Regular, &percentage_string)?;
+    
+    line1.flush()?;
+    line2.flush()?;
     Ok(())
 }
 
-fn draw_line(state: &State<'_>, row: Rect, row_idx: usize) -> Result<()> {
+fn draw_line(state: &State<'_>, x: u16, y: u16, row_idx: usize) -> Result<()> {
     let offset = row_idx * 0x10;
     
     let modified_bytes = state.modified_bytes.get(&row_idx).copied().unwrap_or_default();
@@ -177,11 +172,11 @@ fn draw_line(state: &State<'_>, row: Rect, row_idx: usize) -> Result<()> {
         None => None,
     };
     
-    let mut writer = LineWriter::new(row.x, row.y);
+    let mut writer = LineWriter::new(x, y);
     
     // Write offset
     writer.write(LineColor::Address, format_args!("{:04x} {:04x}", offset >> 16, offset & 0xFFFF))?;
-    writer.write_str(LineColor::Regular, ":  ");
+    writer.write_str(LineColor::Regular, ":  ")?;
     
     let first_half = &state.bytes[offset..usize::min(
         offset + 0x8, 
@@ -215,7 +210,7 @@ fn draw_line(state: &State<'_>, row: Rect, row_idx: usize) -> Result<()> {
             } else if selected_col / 2 == col && selected_col % 2 == 1 {
                 writer.write(color_of(col, x), format_args!("{:01x}", x >> 4))?;
                 writer.write(LineColor::Highlighted, format_args!("{:01x}", x & 0xF))?;
-                writer.write_char(LineColor::Regular, ' ');
+                writer.write_char(LineColor::Regular, ' ')?;
                 return Ok(());
             }
         }
@@ -235,7 +230,7 @@ fn draw_line(state: &State<'_>, row: Rect, row_idx: usize) -> Result<()> {
     }
     
     // Write ascii text
-    writer.seek(64);
+    writer.seek(64)?;
     
     for x in first_half.iter().copied() {
         let mut ascii = x as char;
@@ -243,7 +238,7 @@ fn draw_line(state: &State<'_>, row: Rect, row_idx: usize) -> Result<()> {
             ascii = '.';
         }
         
-        writer.write_char(LineColor::Regular, ascii);
+        writer.write_char(LineColor::Regular, ascii)?;
     }
     
     writer.write_whitespace(" ");
@@ -254,9 +249,9 @@ fn draw_line(state: &State<'_>, row: Rect, row_idx: usize) -> Result<()> {
             ascii = '.';
         }
         
-        writer.write_char(LineColor::Regular, ascii);
+        writer.write_char(LineColor::Regular, ascii)?;
     }
     
-    writer.flush();
+    writer.flush()?;
     Ok(())
 }
