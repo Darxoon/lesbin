@@ -2,6 +2,9 @@
 
 A modern, simple (WIP) TUI hex editor
 
+> [!IMPORTANT]
+> This project has moved to <https://codeberg.org/Ivylag/lesbin>
+
 ## Usage
 
 Run `lesbin <path to binary file>` (or `cargo run -- <path to binary file>`) to open a binary file in lesbin.
